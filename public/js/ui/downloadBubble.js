@@ -3,7 +3,6 @@ import { t } from "../i18n/index.js";
 import { triggerHaptic } from "../utils/device.js";
 import { probeContentLength } from "../downloader/storage.js";
 import { buildDownloadHeaders } from "../downloader/headers.js";
-import { setTikTokSource } from "../scrapers/index.js";
 
 const escapeHtml = (s) =>
   String(s || "").replace(/[&<>"']/g, (m) =>
@@ -43,60 +42,12 @@ export function formatTransferStatus(loadedBytes, totalBytes, speedBps = 0) {
   return `${loadedStr}${speedStr}`;
 }
 
-function injectSwitcherStyles() {
-  if (typeof document === "undefined" || document.getElementById("mori-switcher-styles")) return;
+
+function injectOptionSizeStyles() {
+  if (typeof document === "undefined" || document.getElementById("mori-opt-size-styles")) return;
   const style = document.createElement("style");
-  style.id = "mori-switcher-styles";
+  style.id = "mori-opt-size-styles";
   style.textContent = `
-    .mori-server-switcher {
-      display: flex;
-      gap: 8px;
-      margin-bottom: 14px;
-      width: 100%;
-    }
-    .mori-server-switcher .server-pill {
-      flex: 1;
-      padding: 9px 12px;
-      border-radius: 8px;
-      border: 1.5px solid var(--primary, #000000);
-      background: var(--surface, #ffffff);
-      color: var(--text-main, #000000);
-      cursor: pointer;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      transition: all 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
-      font-family: inherit;
-      box-shadow: 2px 2px 0px var(--primary, #000000);
-    }
-    .mori-server-switcher .server-pill:active {
-      transform: scale(0.96);
-      box-shadow: 1px 1px 0px var(--primary, #000000);
-    }
-    .mori-server-switcher .server-pill.active {
-      background: var(--primary, #000000);
-      color: var(--on-primary, #ffffff);
-    }
-    .mori-server-switcher .server-pill.active .pill-name {
-      color: var(--on-primary, #ffffff);
-    }
-    .mori-server-switcher .server-pill.active .pill-sub {
-      color: var(--on-primary, #ffffff);
-      opacity: 0.85;
-    }
-    .mori-server-switcher .pill-name {
-      font-size: 0.82rem;
-      font-weight: 700;
-      color: var(--text-main, #000000);
-      letter-spacing: -0.2px;
-    }
-    .mori-server-switcher .pill-sub {
-      font-size: 0.68rem;
-      opacity: 0.72;
-      color: var(--text-secondary, #666666);
-      margin-top: 2px;
-    }
     .dl-opt-size {
       opacity: 0.75;
       font-size: 0.88em;
@@ -112,61 +63,16 @@ function enhanceDownloadOptions() {
   const downloadList = document.getElementById("downloadList");
   if (!downloadList) return;
 
-  const urlInput = document.getElementById("urlInput");
-  const rawUrl = (urlInput?.value?.trim() || window._moriActiveDownloadUrl || "").toLowerCase();
-  const isTikTok = rawUrl.includes("tiktok.com") || rawUrl.includes("douyin.com") || rawUrl.includes("tt.site");
+  // Clean up any leftover switcher if present
+  const existingSwitcher = document.getElementById("moriServerSwitcher");
+  if (existingSwitcher) existingSwitcher.remove();
 
-  // 1. TikTok 2-Server Selector
-  let switcher = document.getElementById("moriServerSwitcher");
-  if (isTikTok) {
-    if (!switcher) {
-      switcher = document.createElement("div");
-      switcher.id = "moriServerSwitcher";
-      switcher.className = "mori-server-switcher";
-      downloadList.parentNode.insertBefore(switcher, downloadList);
-    }
-    const currentSrv = localStorage.getItem("mori_prefer_server_tiktok") || "tiktokio";
-    switcher.innerHTML = `
-      <button type="button" class="server-pill ${currentSrv === "tiktokio" ? "active" : ""}" id="moriSrv1">
-        <div class="pill-name">Server 1</div>
-        <div class="pill-sub">TikTokIO (HD)</div>
-      </button>
-      <button type="button" class="server-pill ${currentSrv === "tikdownloader" ? "active" : ""}" id="moriSrv2">
-        <div class="pill-name">Server 2</div>
-        <div class="pill-sub">TikDownloader (1080p)</div>
-      </button>
-    `;
-    const srv1 = switcher.querySelector("#moriSrv1");
-    const srv2 = switcher.querySelector("#moriSrv2");
-    srv1?.addEventListener("click", (e) => {
-      e.stopPropagation();
-      if (localStorage.getItem("mori_prefer_server_tiktok") === "tiktokio") return;
-      localStorage.setItem("mori_prefer_server_tiktok", "tiktokio");
-      localStorage.setItem("mori_server_tiktok", "server1");
-      setTikTokSource("tiktokio");
-      srv1.classList.add("active");
-      srv2?.classList.remove("active");
-      const dlBtn = document.getElementById("downloadBtn");
-      dlBtn?.click();
-    });
-    srv2?.addEventListener("click", (e) => {
-      e.stopPropagation();
-      if (localStorage.getItem("mori_prefer_server_tiktok") === "tikdownloader") return;
-      localStorage.setItem("mori_prefer_server_tiktok", "tikdownloader");
-      localStorage.setItem("mori_server_tiktok", "server2");
-      setTikTokSource("tikdownloader");
-      srv2.classList.add("active");
-      srv1?.classList.remove("active");
-      const dlBtn = document.getElementById("downloadBtn");
-      dlBtn?.click();
-    });
-  } else if (switcher) {
-    switcher.remove();
-  }
-
-  // 2. Add file size display next to resolution on each download button
+  // Add file size display next to resolution on each download button
   const btns = downloadList.querySelectorAll(".dl-item:not(.dl-all-btn)");
   if (btns.length === 0) return;
+
+  const urlInput = document.getElementById("urlInput");
+  const rawUrl = (urlInput?.value?.trim() || window._moriActiveDownloadUrl || "").toLowerCase();
 
   let historyList = [];
   try {
@@ -247,7 +153,7 @@ class DownloadBubbleManager {
   }
 
   initListObserver() {
-    injectSwitcherStyles();
+    injectOptionSizeStyles();
     const attachObserver = () => {
       const downloadList = document.getElementById("downloadList");
       if (downloadList) {
@@ -397,8 +303,7 @@ class DownloadBubbleManager {
       progress: 0,
       loadedBytes: 0,
       totalBytes: 0,
-      speedBps: 0,
-      status: t("status-downloading"),
+      status: "0.0 MB",
       onCancel: onCancel || null,
       element: null,
     };
@@ -447,21 +352,36 @@ class DownloadBubbleManager {
     const dl = this.activeDownloads.get(id);
     if (!dl) return;
 
-    dl.progress = Math.min(100, Math.max(0, Math.round(pct)));
-    if (statusText) dl.status = statusText;
+    const hasKnownTotal = meta ? Boolean(meta.totalBytes > 0) : true;
+    if (typeof pct === "number" && !isNaN(pct)) {
+      dl.progress = Math.min(100, Math.max(0, Math.round(pct)));
+    }
     if (meta) {
       if (typeof meta.loadedBytes === "number") dl.loadedBytes = meta.loadedBytes;
       if (typeof meta.totalBytes === "number") dl.totalBytes = meta.totalBytes;
-      if (typeof meta.speedBps === "number") dl.speedBps = meta.speedBps;
+      statusText = formatTransferStatus(
+        dl.loadedBytes,
+        dl.totalBytes,
+        meta.speedBps || 0,
+      );
     }
+    if (statusText) dl.status = statusText;
 
     if (dl.element) {
       const bar = dl.element.querySelector(".dbd-item-bar");
       const pctEl = dl.element.querySelector(".dbd-item-percent");
       const statusEl = dl.element.querySelector(".dbd-item-status");
-      if (bar) bar.style.width = `${dl.progress}%`;
-      if (pctEl) pctEl.textContent = `${dl.progress}%`;
-      if (statusEl && statusText) statusEl.textContent = statusText;
+      if (bar) {
+        bar.style.width = `${dl.progress}%`;
+      }
+      if (pctEl) {
+        pctEl.textContent = hasKnownTotal
+          ? `${dl.progress}%`
+          : formatBytesToMB(dl.loadedBytes);
+      }
+      if (statusEl && dl.status) {
+        statusEl.textContent = dl.status;
+      }
     }
 
     this.updateOverallProgress();
@@ -471,9 +391,12 @@ class DownloadBubbleManager {
     const dl = this.activeDownloads.get(id);
     if (!dl) return;
 
-    const displayMsg = message || t("status-saved");
+    const finalSizeStr =
+      dl.loadedBytes > 0
+        ? `${formatBytesToMB(dl.loadedBytes)} • ${message || t("status-saved")}`
+        : message || t("status-saved");
     dl.progress = 100;
-    dl.status = displayMsg;
+    dl.status = finalSizeStr;
 
     if (dl.element) {
       dl.element.classList.add("completed");
@@ -482,8 +405,8 @@ class DownloadBubbleManager {
       const statusEl = dl.element.querySelector(".dbd-item-status");
       const cancelBtn = dl.element.querySelector(".dbd-item-cancel");
       if (bar) bar.style.width = "100%";
-      if (pctEl) pctEl.textContent = "✓";
-      if (statusEl) statusEl.textContent = displayMsg;
+      if (pctEl) pctEl.textContent = "100% ✓";
+      if (statusEl) statusEl.textContent = finalSizeStr;
       if (cancelBtn) cancelBtn.style.display = "none";
     }
 
