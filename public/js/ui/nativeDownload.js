@@ -25,6 +25,8 @@ import {
   formatTransferStatus,
 } from "./downloadBubble.js";
 
+let currentActiveDownloadId = null;
+
 export function cancelCurrentDownload() {
   window._moriDownloadCancelled = true;
   // Dispatch event so history spinner can be cleared
@@ -35,6 +37,7 @@ export function cancelCurrentDownload() {
 window._moriCancelDownload = cancelCurrentDownload;
 
 function handleCancelCleanup(btn, originalContent, progressContainer) {
+  currentActiveDownloadId = null;
   if (btn) {
     btn.disabled = false;
     btn.innerHTML = originalContent;
@@ -46,8 +49,8 @@ export async function startNativeDownload(
   url,
   type,
   title,
-  btn,
-  sourceUrl = "",
+  btn = null,
+  sourceUrl = null,
   resetCancelFlag = true,
 ) {
   if (!url || typeof url !== "string" || !url.trim()) {
@@ -76,15 +79,15 @@ export async function startNativeDownload(
     window.__TAURI_INTERNALS__?.invoke ||
     window.__TAURI__?.invoke;
 
-  if (!window.Capacitor && !tauriInvoke) {
+  if (window.Capacitor && !window.Capacitor.isNativePlatform() && !tauriInvoke) {
     try {
       const a = document.createElement("a");
       a.href = url;
-      a.download = (title || "mori_media").replace(/[^a-zA-Z0-9_-]/g, "_");
+      a.download = "";
       a.target = "_blank";
       document.body.appendChild(a);
       a.click();
-      document.body.removeChild(a);
+      a.remove();
     } catch (_) {
       window.open(url, "_blank");
     }
@@ -94,6 +97,7 @@ export async function startNativeDownload(
   if (resetCancelFlag) {
     window._moriDownloadCancelled = false;
   }
+  // If batch already cancelled, bail immediately
   if (window._moriDownloadCancelled) {
     return { success: false, error: "Cancelled" };
   }
@@ -106,15 +110,9 @@ export async function startNativeDownload(
   );
 
   const originalContent = btn ? btn.innerHTML : "";
-  const card = btn ? btn.closest(".result-card, .history-modal-box") : null;
-  const progressContainer = card
-    ? card.querySelector(".download-progress-container")
-    : null;
-  const progressBar = progressContainer
-    ? progressContainer.querySelector(".download-progress-bar")
-    : null;
+  const progressContainer = document.getElementById("progressContainer");
+  const progressBar = document.getElementById("progressBar");
 
-  // Show floating progress bubble ONLY AFTER validation and permissions pass
   const platformLabel = (() => {
     const src = (sourceUrl || url || "").toLowerCase();
     if (src.includes("tiktok") || src.includes("douyin")) return "TikTok";
@@ -150,6 +148,7 @@ export async function startNativeDownload(
 
   let effectiveTitle = title || "Mori Media";
   const dlId = `dl_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  currentActiveDownloadId = dlId;
   let itemCancelled = false;
 
   downloadBubble.addDownload({
@@ -185,7 +184,10 @@ export async function startNativeDownload(
     totalBytes = 0,
     isInitProbe = false,
   }) => {
-    if (totalBytes > knownTotalBytes) {
+    if (currentActiveDownloadId !== dlId || itemCancelled || window._moriDownloadCancelled) {
+      return;
+    }
+    if (totalBytes > 0) {
       knownTotalBytes = totalBytes;
     }
     if (isInitProbe && maxLoadedBytes === 0) {
@@ -270,13 +272,22 @@ export async function startNativeDownload(
         progressListener = await Filesystem.addListener(
           "progress",
           (progress) => {
+            if (currentActiveDownloadId !== dlId || itemCancelled || window._moriDownloadCancelled) {
+              return;
+            }
+            if (progress?.path && fileName) {
+              const p = String(progress.path);
+              if (!p.includes(fileName) && !p.includes(`${fileName}.tmp`)) {
+                return;
+              }
+            }
             const bytes =
               progress?.bytes ??
               progress?.bytesWritten ??
               progress?.loaded ??
               0;
             const total =
-              progress?.contentLength ?? progress?.total ?? knownTotalBytes ?? 0;
+              progress?.contentLength ?? progress?.total ?? 0;
             handleRealByteProgress({
               loadedBytes: bytes,
               totalBytes: total,
@@ -307,9 +318,7 @@ export async function startNativeDownload(
     const musicSubfolder =
       localStorage.getItem("mori_music_path") || "Mori/Music";
     const targetFolder = isAudio ? musicSubfolder : videoSubfolder;
-    let fullPath = targetFolder.startsWith("Download/")
-      ? targetFolder
-      : `Download/${targetFolder}`;
+    let fullPath = `Download/${targetFolder}`;
 
     // Auto-Categorize Subfolder per Platform
     if (localStorage.getItem("mori_auto_folder") !== "false") {
@@ -337,7 +346,6 @@ export async function startNativeDownload(
         btn,
       );
       if (uniqueRes.skipped) {
-        downloadBubble.completeDownload(dlId, "Saved");
         return {
           success: true,
           skipped: true,
@@ -351,6 +359,14 @@ export async function startNativeDownload(
       Boolean(window._moriDownloadCancelled || itemCancelled);
 
     if (checkCancelled()) {
+      if (currentActiveDownloadId === dlId) currentActiveDownloadId = null;
+      if (progressListener) {
+        try { progressListener.remove?.(); } catch (_) {}
+        progressListener = null;
+      }
+      knownTotalBytes = 0;
+      maxLoadedBytes = 0;
+      currentProgressVal = 0;
       downloadBubble.cancelDownload(dlId);
       handleCancelCleanup(btn, originalContent, progressContainer);
       return { success: false, error: "Cancelled" };
@@ -365,6 +381,14 @@ export async function startNativeDownload(
         checkCancelled,
       });
       if (resolveRes.cancelled || checkCancelled()) {
+        if (currentActiveDownloadId === dlId) currentActiveDownloadId = null;
+        if (progressListener) {
+          try { progressListener.remove?.(); } catch (_) {}
+          progressListener = null;
+        }
+        knownTotalBytes = 0;
+        maxLoadedBytes = 0;
+        currentProgressVal = 0;
         downloadBubble.cancelDownload(dlId);
         handleCancelCleanup(btn, originalContent, progressContainer);
         return { success: false, error: "Cancelled" };
@@ -379,19 +403,6 @@ export async function startNativeDownload(
       url,
     );
 
-    // Reset progress bar to 0% before actual file transfer starts
-    updateProgress(
-      0,
-      knownTotalBytes > 0
-        ? `0.0 MB / ${formatBytesToMB(knownTotalBytes)}`
-        : "0.0 MB",
-      {
-        loadedBytes: 0,
-        totalBytes: knownTotalBytes,
-        speedBps: 0,
-      },
-    );
-
     const { savedFile, successfulDir, cancelled } = await saveToStorage({
       actualDownloadUrl,
       fileName,
@@ -404,23 +415,33 @@ export async function startNativeDownload(
     });
 
     if (cancelled || checkCancelled()) {
+      if (currentActiveDownloadId === dlId) currentActiveDownloadId = null;
+      if (progressListener) {
+        try { progressListener.remove?.(); } catch (_) {}
+        progressListener = null;
+      }
+      knownTotalBytes = 0;
+      maxLoadedBytes = 0;
+      currentProgressVal = 0;
       downloadBubble.cancelDownload(dlId);
       handleCancelCleanup(btn, originalContent, progressContainer);
       return { success: false, error: "Cancelled" };
     }
 
-    const completedStatus =
-      maxLoadedBytes > 0
-        ? `${formatBytesToMB(maxLoadedBytes)} / ${formatBytesToMB(knownTotalBytes || maxLoadedBytes)}`
-        : "100%";
-    updateProgress(100, completedStatus);
+    if (window._moriActiveSimInterval) {
+      clearInterval(window._moriActiveSimInterval);
+      window._moriActiveSimInterval = null;
+    }
 
+    updateProgress(100, "Downloading...");
     if (btn) {
       const b = btn.querySelector(".dl-badge");
       if (b) {
-        b.textContent = "SAVED ✓";
+        b.textContent = "SAVED";
+        b.style.backgroundColor = "";
+        b.style.color = "";
       } else {
-        btn.innerHTML = "SAVED ✓";
+        btn.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" style="margin-right:8px"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg> SAVED`;
       }
     }
 
@@ -440,6 +461,10 @@ export async function startNativeDownload(
     return postRes;
   } catch (err) {
     console.error("Download failed", err);
+    if (window._moriActiveSimInterval) {
+      clearInterval(window._moriActiveSimInterval);
+      window._moriActiveSimInterval = null;
+    }
 
     let errorMsg = err?.message || "Download failed";
     if (
@@ -471,9 +496,9 @@ export async function startNativeDownload(
       btn.disabled = false;
       const b = btn.querySelector(".dl-badge");
       if (b) {
-        if (!window._moriPlaylistDownloading) {
-          b.textContent = "RETRY";
-          b.style.background = "#e74c3c";
+        if (window._moriPlaylistDownloading) {
+          b.textContent = "FAILED";
+          b.style.backgroundColor = "var(--color-danger, #ef4444)";
           b.style.color = "#ffffff";
         } else {
           b.textContent =
@@ -483,12 +508,20 @@ export async function startNativeDownload(
         btn.innerHTML = originalContent;
       }
     }
-    if (progressContainer) progressContainer.classList.add("hidden");
+    if (!window._moriPlaylistDownloading && progressContainer) {
+      progressContainer.classList.add("hidden");
+    }
+
     return {
       success: false,
       error: errorMsg,
     };
   } finally {
+    if (currentActiveDownloadId === dlId) currentActiveDownloadId = null;
+    if (progressListener) {
+      try { progressListener.remove?.(); } catch (_) {}
+      progressListener = null;
+    }
     window._moriActiveDownloadsCount = Math.max(
       0,
       (window._moriActiveDownloadsCount || 1) - 1,
@@ -503,10 +536,9 @@ export async function startNativeDownload(
         } catch (_) {}
       }
     }
-    if (progressListener && typeof progressListener.remove === "function") {
-      try {
-        await progressListener.remove();
-      } catch (_) {}
+    if (window._moriActiveSimInterval) {
+      clearInterval(window._moriActiveSimInterval);
+      window._moriActiveSimInterval = null;
     }
   }
 }

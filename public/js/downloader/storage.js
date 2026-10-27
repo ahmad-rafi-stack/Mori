@@ -96,13 +96,14 @@ export async function saveToStorage({
   // Probe Content-Length asynchronously in background so total MB is known early
   let probedTotalBytes = 0;
   probeContentLength(actualDownloadUrl, downloadHeaders).then((len) => {
+    if (checkCancelled && checkCancelled()) return;
     if (len > 0) {
       probedTotalBytes = len;
-      if (typeof onByteProgress === "function") {
+      if (typeof onByteProgress === "function" && !checkCancelled()) {
         onByteProgress({ loadedBytes: 0, totalBytes: probedTotalBytes, isInitProbe: true });
       }
     }
-  });
+  }).catch(() => {});
 
   const tauriInvoke =
     window.__TAURI__?.core?.invoke ||
@@ -184,12 +185,25 @@ export async function saveToStorage({
           // in case the native bridge omits progress events on chunked streams
           if (typeof onByteProgress === "function") {
             statPoller = setInterval(async () => {
-              if (checkCancelled()) return;
+              if (checkCancelled()) {
+                if (statPoller) {
+                  clearInterval(statPoller);
+                  statPoller = null;
+                }
+                return;
+              }
               try {
                 const st = await Filesystem.stat({
                   path: tempFilePath,
                   directory: dir,
                 });
+                if (checkCancelled()) {
+                  if (statPoller) {
+                    clearInterval(statPoller);
+                    statPoller = null;
+                  }
+                  return;
+                }
                 if (st && typeof st.size === "number" && st.size > 0) {
                   onByteProgress({
                     loadedBytes: st.size,
@@ -221,7 +235,6 @@ export async function saveToStorage({
               }
             } catch (_) {}
 
-            // Rename .tmp to actual file name atomically on completion
             try {
               await Filesystem.rename({
                 from: tempFilePath,
@@ -230,7 +243,6 @@ export async function saveToStorage({
               });
               savedFile = { path: fullPath + "/" + fileName };
             } catch (_) {
-              // Fallback copy if rename unsupported
               await Filesystem.copy({
                 from: tempFilePath,
                 to: fullPath + "/" + fileName,
@@ -253,12 +265,9 @@ export async function saveToStorage({
             `Download attempt ${attempts} on ${dir} failed:`,
             dlErr,
           );
-          await Filesystem.deleteFile({
-            path: fullPath + "/" + `${fileName}.tmp`,
-            directory: dir,
-          }).catch(() => {});
+          await cleanupTempFiles(fullPath, fileName, directoriesToTry);
 
-          // Fallback to CapacitorHttp blob download if retries exhausted
+          // 3. Fallback to CapacitorHttp blob download if retries exhausted
           if (attempts >= maxAttempts && CapacitorHttp) {
             try {
               const httpRes = await CapacitorHttp.get({
