@@ -1,4 +1,4 @@
-// storage.js — file system downloading, retries, and persistence
+// storage.js — file system downloading, real-time byte progress probing, retries, and persistence
 import { Filesystem, CapacitorHttp } from "../utils/index.js";
 import { translations } from "../i18n/index.js";
 import { currentLang } from "../modules/core.js";
@@ -31,7 +31,46 @@ export async function deleteSavedFile(savedFile, directoriesToTry) {
 }
 
 /**
- * Executes file download using Tauri, Capacitor Filesystem, or CapacitorHttp fallback
+ * Probes Content-Length header if not yet reported by native stream
+ */
+export async function probeContentLength(url, headers = {}) {
+  try {
+    if (CapacitorHttp?.request) {
+      const headRes = await CapacitorHttp.request({
+        method: "HEAD",
+        url,
+        headers,
+        connectTimeout: 6000,
+        readTimeout: 6000,
+      });
+      const h = headRes?.headers || {};
+      const lenVal =
+        h["content-length"] ||
+        h["Content-Length"] ||
+        h["Content-length"] ||
+        0;
+      const parsed = parseInt(lenVal, 10);
+      if (parsed > 0) return parsed;
+    }
+  } catch (_) {}
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5000);
+    const res = await fetch(url, {
+      method: "HEAD",
+      headers,
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    const lenHeader = res.headers.get("content-length");
+    const parsed = parseInt(lenHeader || "0", 10);
+    if (parsed > 0) return parsed;
+  } catch (_) {}
+  return 0;
+}
+
+/**
+ * Executes file download using Tauri, Capacitor Filesystem (with real-time byte progress), or streaming fallback
  */
 export async function saveToStorage({
   actualDownloadUrl,
@@ -41,6 +80,7 @@ export async function saveToStorage({
   downloadHeaders,
   directoriesToTry,
   checkCancelled,
+  onByteProgress,
 }) {
   let savedFile = null;
   let successfulDir = "EXTERNAL_STORAGE";
@@ -53,18 +93,39 @@ export async function saveToStorage({
   );
   const maxAttempts = isAutoRetry ? customMaxRetry : 1;
 
+  // Probe Content-Length asynchronously in background so total MB is known early
+  let probedTotalBytes = 0;
+  probeContentLength(actualDownloadUrl, downloadHeaders).then((len) => {
+    if (len > 0) {
+      probedTotalBytes = len;
+      if (typeof onByteProgress === "function") {
+        onByteProgress({ loadedBytes: 0, totalBytes: probedTotalBytes, isInitProbe: true });
+      }
+    }
+  });
+
   const tauriInvoke =
     window.__TAURI__?.core?.invoke ||
     window.__TAURI_INTERNALS__?.invoke ||
     window.__TAURI__?.invoke;
 
-  // 1. Desktop / Tauri Invocation
+  // 1. Desktop / Tauri Invocation (with event listener if Tauri emits progress)
   if (tauriInvoke) {
+    let unlistenTauri = null;
     try {
+      const tauriEvent = window.__TAURI__?.event;
+      if (tauriEvent?.listen && typeof onByteProgress === "function") {
+        unlistenTauri = await tauriEvent.listen("tauri_download_progress", (ev) => {
+          const payload = ev?.payload || {};
+          const loaded = payload.bytes ?? payload.bytesWritten ?? payload.loaded ?? 0;
+          const total = payload.contentLength ?? payload.total ?? probedTotalBytes ?? 0;
+          onByteProgress({ loadedBytes: loaded, totalBytes: total });
+        });
+      }
       const desktopRes = await tauriInvoke("tauri_download_file", {
         url: actualDownloadUrl,
         filename: fileName,
-        folder: fullPath || targetFolder || "",
+        folder: targetFolder || "",
         headers: downloadHeaders || {},
       });
       if (desktopRes && desktopRes.status) {
@@ -77,22 +138,27 @@ export async function saveToStorage({
           ? tErr
           : tErr?.message || JSON.stringify(tErr),
       );
+    } finally {
+      if (typeof unlistenTauri === "function") {
+        try {
+          unlistenTauri();
+        } catch (_) {}
+      }
     }
   }
 
-  // 2. Mobile / Capacitor Filesystem Download
-  const tempFileName = `${fileName}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}.tmp`;
-
+  // 2. Mobile / Capacitor Filesystem Download with real-time .tmp stat & event progress
   if (!savedFile && Filesystem) {
     for (const dir of directoriesToTry) {
       if (savedFile) break;
       attempts = 0;
       while (attempts < maxAttempts && !savedFile) {
         if (checkCancelled()) {
-          await cleanupTempFiles(fullPath, tempFileName, directoriesToTry);
+          await cleanupTempFiles(fullPath, fileName, directoriesToTry);
           return { savedFile: null, successfulDir, cancelled: true };
         }
         attempts++;
+        let statPoller = null;
         try {
           if (attempts > 1) {
             await new Promise((r) => setTimeout(r, 1000));
@@ -102,9 +168,11 @@ export async function saveToStorage({
           const isForceIpv4 =
             localStorage.getItem("mori_force_ipv4") === "true";
 
+          const tempFileName = `${fileName}.tmp`;
+          const tempFilePath = fullPath + "/" + tempFileName;
           const dlOpts = {
             url: actualDownloadUrl,
-            path: fullPath + "/" + tempFileName,
+            path: tempFilePath,
             directory: dir,
             progress: true,
             headers: downloadHeaders,
@@ -112,12 +180,51 @@ export async function saveToStorage({
           if (isBypassSsl) dlOpts.disableSSLValidation = true;
           if (isForceIpv4) dlOpts.ipv4Only = true;
 
+          // Poll .tmp file size every 350ms as a reliable real-byte fallback
+          // in case the native bridge omits progress events on chunked streams
+          if (typeof onByteProgress === "function") {
+            statPoller = setInterval(async () => {
+              if (checkCancelled()) return;
+              try {
+                const st = await Filesystem.stat({
+                  path: tempFilePath,
+                  directory: dir,
+                });
+                if (st && typeof st.size === "number" && st.size > 0) {
+                  onByteProgress({
+                    loadedBytes: st.size,
+                    totalBytes: probedTotalBytes,
+                    fromStat: true,
+                  });
+                }
+              } catch (_) {}
+            }, 350);
+          }
+
           const tempSaved = await Filesystem.downloadFile(dlOpts);
+          if (statPoller) {
+            clearInterval(statPoller);
+            statPoller = null;
+          }
+
           if (tempSaved) {
+            try {
+              const finalStat = await Filesystem.stat({
+                path: tempFilePath,
+                directory: dir,
+              }).catch(() => null);
+              if (finalStat?.size > 0 && typeof onByteProgress === "function") {
+                onByteProgress({
+                  loadedBytes: finalStat.size,
+                  totalBytes: finalStat.size,
+                });
+              }
+            } catch (_) {}
+
             // Rename .tmp to actual file name atomically on completion
             try {
               await Filesystem.rename({
-                from: fullPath + "/" + tempFileName,
+                from: tempFilePath,
                 to: fullPath + "/" + fileName,
                 directory: dir,
               });
@@ -125,12 +232,12 @@ export async function saveToStorage({
             } catch (_) {
               // Fallback copy if rename unsupported
               await Filesystem.copy({
-                from: fullPath + "/" + tempFileName,
+                from: tempFilePath,
                 to: fullPath + "/" + fileName,
                 directory: dir,
               });
               await Filesystem.deleteFile({
-                path: fullPath + "/" + tempFileName,
+                path: tempFilePath,
                 directory: dir,
               }).catch(() => {});
               savedFile = { path: fullPath + "/" + fileName };
@@ -138,13 +245,16 @@ export async function saveToStorage({
             successfulDir = dir;
           }
         } catch (dlErr) {
+          if (statPoller) {
+            clearInterval(statPoller);
+            statPoller = null;
+          }
           console.warn(
             `Download attempt ${attempts} on ${dir} failed:`,
             dlErr,
           );
-          // Clean up leftover .tmp file on error
           await Filesystem.deleteFile({
-            path: fullPath + "/" + tempFileName,
+            path: fullPath + "/" + `${fileName}.tmp`,
             directory: dir,
           }).catch(() => {});
 
@@ -186,10 +296,10 @@ export async function saveToStorage({
 
   if (!savedFile) {
     if (checkCancelled()) {
-      await cleanupTempFiles(fullPath, tempFileName, directoriesToTry);
+      await cleanupTempFiles(fullPath, fileName, directoriesToTry);
       return { savedFile: null, successfulDir, cancelled: true };
     }
-    await cleanupTempFiles(fullPath, tempFileName, directoriesToTry);
+    await cleanupTempFiles(fullPath, fileName, directoriesToTry);
     throw new Error(
       translations[currentLang]?.["toast-download-failed"] || "Download failed",
     );
