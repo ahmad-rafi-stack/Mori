@@ -1,3 +1,4 @@
+// nativeDownload.js — native download orchestrator with real-time MB & accurate percentage progress
 import { translations, t } from "../i18n/index.js";
 import {
   showToast,
@@ -5,7 +6,6 @@ import {
   requestWakeLock,
   releaseWakeLock,
   checkWifiOnlyGuard,
-  normalizePathInput,
 } from "../utils/index.js";
 import { currentLang } from "../modules/core.js";
 import {
@@ -19,7 +19,11 @@ import { cleanDownloadUrl, buildDownloadHeaders } from "../downloader/headers.js
 import { needsAsyncResolving, resolveDownloadUrl } from "../downloader/resolver.js";
 import { saveToStorage } from "../downloader/storage.js";
 import { handlePostDownload } from "../downloader/postProcess.js";
-import { downloadBubble } from "./downloadBubble.js";
+import {
+  downloadBubble,
+  formatBytesToMB,
+  formatTransferStatus,
+} from "./downloadBubble.js";
 
 export function cancelCurrentDownload() {
   window._moriDownloadCancelled = true;
@@ -43,7 +47,7 @@ export async function startNativeDownload(
   type,
   title,
   btn,
-  sourceUrl,
+  sourceUrl = "",
   resetCancelFlag = true,
 ) {
   if (!url || typeof url !== "string" || !url.trim()) {
@@ -63,7 +67,7 @@ export async function startNativeDownload(
     url.includes("_capacitor_file_") ||
     url.startsWith("content://")
   ) {
-    showToast(t("toast-already-local"));
+    showToast("File is already stored locally");
     return { success: true, skipped: true };
   }
 
@@ -72,13 +76,15 @@ export async function startNativeDownload(
     window.__TAURI_INTERNALS__?.invoke ||
     window.__TAURI__?.invoke;
 
-  if (!Filesystem && !tauriInvoke) {
+  if (!window.Capacitor && !tauriInvoke) {
     try {
       const a = document.createElement("a");
       a.href = url;
-      a.download = "";
+      a.download = (title || "mori_media").replace(/[^a-zA-Z0-9_-]/g, "_");
       a.target = "_blank";
+      document.body.appendChild(a);
       a.click();
+      document.body.removeChild(a);
     } catch (_) {
       window.open(url, "_blank");
     }
@@ -88,7 +94,6 @@ export async function startNativeDownload(
   if (resetCancelFlag) {
     window._moriDownloadCancelled = false;
   }
-  // If batch already cancelled, bail immediately
   if (window._moriDownloadCancelled) {
     return { success: false, error: "Cancelled" };
   }
@@ -96,54 +101,39 @@ export async function startNativeDownload(
   window._moriActiveDownloadUrl = sourceUrl || url;
   window.dispatchEvent(
     new CustomEvent("mori_download_started", {
-      detail: { url: sourceUrl || url },
+      detail: { url: sourceUrl || url, title },
     }),
   );
 
-  const progressBar = document.getElementById("progressBar");
-  const progressContainer = document.getElementById("progressContainer");
   const originalContent = btn ? btn.innerHTML : "";
+  const card = btn ? btn.closest(".result-card, .history-modal-box") : null;
+  const progressContainer = card
+    ? card.querySelector(".download-progress-container")
+    : null;
+  const progressBar = progressContainer
+    ? progressContainer.querySelector(".download-progress-bar")
+    : null;
 
-  if (window.Capacitor?.getPlatform?.() === "android") {
-    try {
-      const status = await Filesystem.checkPermissions();
-      if (status.publicStorage !== "granted") {
-        await Filesystem.requestPermissions().catch(() => {});
-      }
-    } catch (e) {
-      console.warn("Permission check failed", e);
-    }
-  }
-
-  // Show floating progress toast ONLY AFTER validation and permissions pass
+  // Show floating progress bubble ONLY AFTER validation and permissions pass
   const platformLabel = (() => {
     const src = (sourceUrl || url || "").toLowerCase();
-    if (src.includes("tiktok")) return "TikTok";
-    if (src.includes("instagram")) return "Instagram";
-    if (src.includes("youtube")) return "YouTube";
-    if (src.includes("twitter") || /(?:^|[/.])x\.com(?:[/?#:]|$)/i.test(src))
-      return "Twitter";
-    if (src.includes("facebook")) return "Facebook";
-    if (src.includes("pinterest")) return "Pinterest";
-    if (src.includes("douyin")) return "Douyin";
-    if (src.includes("bilibili") || src.includes("b23.tv")) return "Bilibili";
+    if (src.includes("tiktok") || src.includes("douyin")) return "TikTok";
+    if (src.includes("instagram") || src.includes("instagr.am"))
+      return "Instagram";
+    if (src.includes("youtube") || src.includes("youtu.be")) return "YouTube";
+    if (src.includes("twitter") || src.includes("x.com")) return "X";
+    if (src.includes("facebook") || src.includes("fb.")) return "Facebook";
+    if (src.includes("pinterest") || src.includes("pin.it")) return "Pinterest";
     if (src.includes("spotify")) return "Spotify";
-    if (src.includes("bandcamp")) return "Bandcamp";
-    if (src.includes("pixiv") || src.includes("pximg")) return "Pixiv";
-    if (src.includes("xiaohongshu") || src.includes("rednote"))
-      return "RedNote";
+    if (src.includes("apple")) return "Apple Music";
     if (src.includes("threads")) return "Threads";
+    if (src.includes("rednote") || src.includes("xiaohongshu"))
+      return "RedNote";
+    if (src.includes("bilibili") || src.includes("b23.tv")) return "Bilibili";
+    if (src.includes("pixiv") || src.includes("pximg")) return "Pixiv";
+    if (src.includes("bandcamp")) return "Bandcamp";
     if (src.includes("reddit") || src.includes("redd.it")) return "Reddit";
-    if (
-      src.includes("terabox") ||
-      src.includes("1024tera") ||
-      src.includes("nephobox") ||
-      src.includes("4funbox") ||
-      src.includes("mirrobox") ||
-      src.includes("momerybox") ||
-      src.includes("tibibox")
-    )
-      return "TeraBox";
+    if (src.includes("terabox") || src.includes("1024tera")) return "TeraBox";
     if (src.includes("snapchat")) return "Snapchat";
     return "Media";
   })();
@@ -157,8 +147,6 @@ export async function startNativeDownload(
     (window._moriActiveDownloadsCount || 0) + 1;
 
   const hideProgress = localStorage.getItem("mori_hide_progress") === "true";
-  const isMultiDownload =
-    window._moriPlaylistDownloading || window._moriActiveDownloadsCount > 1;
 
   let effectiveTitle = title || "Mori Media";
   const dlId = `dl_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
@@ -175,41 +163,101 @@ export async function startNativeDownload(
   });
 
   let currentProgressVal = 0;
-  const updateProgress = (pct, statusText) => {
+  let maxLoadedBytes = 0;
+  let knownTotalBytes = 0;
+  let lastSpeedSampleTime = Date.now();
+  let lastSpeedSampleBytes = 0;
+  let currentSpeedBps = 0;
+
+  const updateProgress = (pct, statusText, meta = null) => {
     if (hideProgress) return;
     if (typeof pct === "number" && !isNaN(pct)) {
-      const maxCap = pct >= 100 ? 100 : 99;
-      const targetPct = Math.min(
-        maxCap,
-        Math.max(currentProgressVal, Math.round(pct)),
-      );
-      currentProgressVal = targetPct;
+      currentProgressVal = Math.min(100, Math.max(0, Math.round(pct)));
     }
-    if (progressBar) progressBar.style.width = `${currentProgressVal}%`;
-    downloadBubble.updateProgress(dlId, currentProgressVal, statusText);
+    if (progressBar) {
+      progressBar.style.width = `${currentProgressVal}%`;
+    }
+    downloadBubble.updateProgress(dlId, currentProgressVal, statusText, meta);
   };
+
+  const handleRealByteProgress = ({
+    loadedBytes = 0,
+    totalBytes = 0,
+    isInitProbe = false,
+  }) => {
+    if (totalBytes > knownTotalBytes) {
+      knownTotalBytes = totalBytes;
+    }
+    if (isInitProbe && maxLoadedBytes === 0) {
+      updateProgress(0, `0.0 MB / ${formatBytesToMB(knownTotalBytes)}`, {
+        loadedBytes: 0,
+        totalBytes: knownTotalBytes,
+        speedBps: 0,
+      });
+      return;
+    }
+    if (loadedBytes < maxLoadedBytes) return;
+    maxLoadedBytes = loadedBytes;
+
+    const now = Date.now();
+    const elapsedSec = (now - lastSpeedSampleTime) / 1000;
+    if (elapsedSec >= 0.4) {
+      const deltaBytes = maxLoadedBytes - lastSpeedSampleBytes;
+      if (deltaBytes >= 0) {
+        currentSpeedBps = deltaBytes / elapsedSec;
+      }
+      lastSpeedSampleTime = now;
+      lastSpeedSampleBytes = maxLoadedBytes;
+    }
+
+    let pct = currentProgressVal;
+    if (knownTotalBytes > 0) {
+      pct = Math.min(100, Math.round((maxLoadedBytes / knownTotalBytes) * 100));
+    } else {
+      pct = 0;
+    }
+
+    const statusStr = formatTransferStatus(
+      maxLoadedBytes,
+      knownTotalBytes,
+      currentSpeedBps,
+    );
+    updateProgress(pct, statusStr, {
+      loadedBytes: maxLoadedBytes,
+      totalBytes: knownTotalBytes,
+      speedBps: currentSpeedBps,
+    });
+
+    if (btn) {
+      const b = btn.querySelector(".dl-badge");
+      const badgeLabel =
+        knownTotalBytes > 0
+          ? `${pct}% (${formatBytesToMB(maxLoadedBytes)})`
+          : formatBytesToMB(maxLoadedBytes);
+      if (b) {
+        b.textContent = badgeLabel;
+      }
+    }
+  };
+
+  let progressListener = null;
 
   try {
     if (btn) btn.disabled = true;
     if (progressContainer) progressContainer.classList.remove("hidden");
-    updateProgress(0, "Downloading...");
+    if (progressBar) progressBar.style.width = "0%";
 
-    // Acquire Wake Lock & Start Native Foreground Service
     requestWakeLock();
     if (window.MoriMainBridge?.startDownloadService) {
       try {
-        window.MoriMainBridge.startDownloadService(
-          `Downloading ${platformLabel} ${type || ""}`,
-        );
-      } catch (e) {
-        console.warn("Foreground service start error", e);
-      }
+        window.MoriMainBridge.startDownloadService(effectiveTitle);
+      } catch (_) {}
     }
 
-    const initialBadge = btn ? btn.querySelector(".dl-badge") : null;
     if (btn) {
+      const initialBadge = btn.querySelector(".dl-badge");
       if (initialBadge) {
-        initialBadge.textContent = "...";
+        initialBadge.textContent = "0.0 MB";
       } else {
         btn.innerHTML =
           translations[currentLang]?.["btn-processing"] || "Processing...";
@@ -217,48 +265,22 @@ export async function startNativeDownload(
     }
     console.log("Starting download for:", url);
 
-    let simProgress = 0;
-    let realProgressReceived = false;
-    window._moriActiveSimInterval = setInterval(() => {
-      if (realProgressReceived) return;
-      if (simProgress < 50) {
-        simProgress += 6 + Math.random() * 4;
-      } else if (simProgress < 80) {
-        simProgress += 2.5 + Math.random() * 2.5;
-      } else if (simProgress < 95) {
-        simProgress += 0.6 + Math.random() * 0.9;
-      }
-      const currentPct = Math.min(95, Math.round(simProgress));
-      updateProgress(currentPct, "Downloading...");
-    }, 160);
-
-    // Remove any existing listeners first to avoid double-firing
-    if (window._moriProgressListener) {
-      try {
-        await window._moriProgressListener.remove();
-      } catch (_) {}
-      window._moriProgressListener = null;
-    }
-
-    // Listen for real progress if Filesystem exists
     if (Filesystem?.addListener) {
       try {
-        window._moriProgressListener = await Filesystem.addListener(
-          "downloadProgress",
+        progressListener = await Filesystem.addListener(
+          "progress",
           (progress) => {
-            realProgressReceived = true;
-            let percentage = 0;
-            if (progress.contentLength > 0) {
-              percentage = Math.round(
-                (progress.bytesWritten / progress.contentLength) * 100,
-              );
-            } else if (progress.bytesWritten > 0) {
-              percentage = Math.min(
-                95,
-                Math.round(progress.bytesWritten / 10240),
-              );
-            }
-            updateProgress(Math.min(95, percentage), "Downloading...");
+            const bytes =
+              progress?.bytes ??
+              progress?.bytesWritten ??
+              progress?.loaded ??
+              0;
+            const total =
+              progress?.contentLength ?? progress?.total ?? knownTotalBytes ?? 0;
+            handleRealByteProgress({
+              loadedBytes: bytes,
+              totalBytes: total,
+            });
           },
         );
       } catch (e) {
@@ -280,40 +302,14 @@ export async function startNativeDownload(
     let fileName = generateFileName(sanitizedTitle, ext, sourceUrl, url);
 
     const isAudio = /mp3|audio|128k|48k|m4a|wav|flac/i.test(type);
-    const rawVideoFolder = (localStorage.getItem("mori_download_path") || "").trim();
-    const rawMusicFolder = (localStorage.getItem("mori_music_path") || "").trim();
-
-    const isAndroid = window.Capacitor?.getPlatform?.() === "android";
-    const hasAllFiles = isAndroid && window.MoriMainBridge?.hasAllFilesPermission
-      ? window.MoriMainBridge.hasAllFilesPermission()
-      : true;
-
-    const defaultVideoFolder = "Download/Mori";
-    const defaultMusicFolder = isAndroid ? "Download/Mori/Music" : "Music/Mori";
-
-    let targetFolder = isAudio
-      ? (rawMusicFolder || defaultMusicFolder)
-      : (rawVideoFolder || defaultVideoFolder);
-
-    if (targetFolder === "Mori") {
-      targetFolder = defaultVideoFolder;
-    } else if (targetFolder === "Mori/Music") {
-      targetFolder = defaultMusicFolder;
-    }
-
-    targetFolder =
-      normalizePathInput(targetFolder) ||
-      (isAudio ? defaultMusicFolder : defaultVideoFolder);
-
-    // Android Scoped Storage fallback:
-    // If All Files Access is not granted, automatically save into Download/Mori default
-    if (isAndroid && !hasAllFiles) {
-      if (!targetFolder.toLowerCase().startsWith("download")) {
-        targetFolder = isAudio ? "Download/Mori/Music" : "Download/Mori";
-      }
-    }
-
-    let fullPath = targetFolder;
+    const videoSubfolder =
+      localStorage.getItem("mori_download_path") || "Mori";
+    const musicSubfolder =
+      localStorage.getItem("mori_music_path") || "Mori/Music";
+    const targetFolder = isAudio ? musicSubfolder : videoSubfolder;
+    let fullPath = targetFolder.startsWith("Download/")
+      ? targetFolder
+      : `Download/${targetFolder}`;
 
     // Auto-Categorize Subfolder per Platform
     if (localStorage.getItem("mori_auto_folder") !== "false") {
@@ -329,9 +325,7 @@ export async function startNativeDownload(
           path: fullPath,
           directory: dir,
           recursive: true,
-        }).catch((e) => {
-          console.warn(`Mkdir on ${dir} failed or exists:`, e);
-        });
+        }).catch(() => {});
       }
 
       const uniqueRes = await resolveUniqueFileName(
@@ -343,6 +337,7 @@ export async function startNativeDownload(
         btn,
       );
       if (uniqueRes.skipped) {
+        downloadBubble.completeDownload(dlId, "Saved");
         return {
           success: true,
           skipped: true,
@@ -384,6 +379,19 @@ export async function startNativeDownload(
       url,
     );
 
+    // Reset progress bar to 0% before actual file transfer starts
+    updateProgress(
+      0,
+      knownTotalBytes > 0
+        ? `0.0 MB / ${formatBytesToMB(knownTotalBytes)}`
+        : "0.0 MB",
+      {
+        loadedBytes: 0,
+        totalBytes: knownTotalBytes,
+        speedBps: 0,
+      },
+    );
+
     const { savedFile, successfulDir, cancelled } = await saveToStorage({
       actualDownloadUrl,
       fileName,
@@ -392,6 +400,7 @@ export async function startNativeDownload(
       downloadHeaders,
       directoriesToTry,
       checkCancelled,
+      onByteProgress: handleRealByteProgress,
     });
 
     if (cancelled || checkCancelled()) {
@@ -400,20 +409,18 @@ export async function startNativeDownload(
       return { success: false, error: "Cancelled" };
     }
 
-    if (window._moriActiveSimInterval) {
-      clearInterval(window._moriActiveSimInterval);
-      window._moriActiveSimInterval = null;
-    }
+    const completedStatus =
+      maxLoadedBytes > 0
+        ? `${formatBytesToMB(maxLoadedBytes)} / ${formatBytesToMB(knownTotalBytes || maxLoadedBytes)}`
+        : "100%";
+    updateProgress(100, completedStatus);
 
-    updateProgress(100, "Downloading...");
     if (btn) {
       const b = btn.querySelector(".dl-badge");
       if (b) {
-        b.textContent = "SAVED";
-        b.style.backgroundColor = "";
-        b.style.color = "";
+        b.textContent = "SAVED ✓";
       } else {
-        btn.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" style="margin-right:8px"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg> SAVED`;
+        btn.innerHTML = "SAVED ✓";
       }
     }
 
@@ -433,10 +440,6 @@ export async function startNativeDownload(
     return postRes;
   } catch (err) {
     console.error("Download failed", err);
-    if (window._moriActiveSimInterval) {
-      clearInterval(window._moriActiveSimInterval);
-      window._moriActiveSimInterval = null;
-    }
 
     let errorMsg = err?.message || "Download failed";
     if (
@@ -468,9 +471,9 @@ export async function startNativeDownload(
       btn.disabled = false;
       const b = btn.querySelector(".dl-badge");
       if (b) {
-        if (window._moriPlaylistDownloading) {
-          b.textContent = t("status-failed");
-          b.style.backgroundColor = "var(--color-danger, #ef4444)";
+        if (!window._moriPlaylistDownloading) {
+          b.textContent = "RETRY";
+          b.style.background = "#e74c3c";
           b.style.color = "#ffffff";
         } else {
           b.textContent =
@@ -480,10 +483,7 @@ export async function startNativeDownload(
         btn.innerHTML = originalContent;
       }
     }
-    if (!window._moriPlaylistDownloading && progressContainer) {
-      progressContainer.classList.add("hidden");
-    }
-
+    if (progressContainer) progressContainer.classList.add("hidden");
     return {
       success: false,
       error: errorMsg,
@@ -503,13 +503,10 @@ export async function startNativeDownload(
         } catch (_) {}
       }
     }
-    if (window._moriActiveSimInterval) {
-      clearInterval(window._moriActiveSimInterval);
-      window._moriActiveSimInterval = null;
-    }
-    if (window._moriProgressListener) {
-      await window._moriProgressListener.remove();
-      window._moriProgressListener = null;
+    if (progressListener && typeof progressListener.remove === "function") {
+      try {
+        await progressListener.remove();
+      } catch (_) {}
     }
   }
 }

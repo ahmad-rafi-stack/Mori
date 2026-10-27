@@ -1,4 +1,4 @@
-// downloadBubble.js — Floating Download Bubble with Multi-Download Dropup Manager
+// downloadBubble.js — Floating Download Bubble with Multi-Download Dropup Manager (Real-Time MB & Accurate Progress)
 import { t } from "../i18n/index.js";
 import { triggerHaptic } from "../utils/device.js";
 
@@ -18,6 +18,27 @@ const truncateTitle = (s, max = 22) => {
   if (str.length <= max) return str;
   return str.slice(0, max).trim() + "...";
 };
+
+export function formatBytesToMB(bytes) {
+  if (typeof bytes !== "number" || isNaN(bytes) || bytes < 0) return "0.0 MB";
+  const mb = bytes / (1024 * 1024);
+  if (mb < 0.1 && bytes > 0) {
+    const kb = Math.max(1, Math.round(bytes / 1024));
+    return `${kb} KB`;
+  }
+  return `${mb.toFixed(1)} MB`;
+}
+
+export function formatTransferStatus(loadedBytes, totalBytes, speedBps = 0) {
+  const loadedStr = formatBytesToMB(loadedBytes);
+  const speedStr =
+    speedBps > 0 ? ` • ${formatBytesToMB(speedBps)}/s` : "";
+  if (totalBytes && totalBytes > 0) {
+    const totalStr = formatBytesToMB(totalBytes);
+    return `${loadedStr} / ${totalStr}${speedStr}`;
+  }
+  return `${loadedStr}${speedStr}`;
+}
 
 class DownloadBubbleManager {
   constructor() {
@@ -189,7 +210,9 @@ class DownloadBubbleManager {
       platform: platform || "Media",
       type: cleanType,
       progress: 0,
-      status: t("status-downloading"),
+      loadedBytes: 0,
+      totalBytes: 0,
+      status: "0.0 MB",
       onCancel: onCancel || null,
       element: null,
     };
@@ -234,20 +257,40 @@ class DownloadBubbleManager {
     this.listEl.prepend(itemEl);
   }
 
-  updateProgress(id, pct, statusText) {
+  updateProgress(id, pct, statusText, meta = null) {
     const dl = this.activeDownloads.get(id);
     if (!dl) return;
 
-    dl.progress = Math.min(100, Math.max(0, Math.round(pct)));
+    const hasKnownTotal = meta ? Boolean(meta.totalBytes > 0) : true;
+    if (typeof pct === "number" && !isNaN(pct)) {
+      dl.progress = Math.min(100, Math.max(0, Math.round(pct)));
+    }
+    if (meta) {
+      if (typeof meta.loadedBytes === "number") dl.loadedBytes = meta.loadedBytes;
+      if (typeof meta.totalBytes === "number") dl.totalBytes = meta.totalBytes;
+      statusText = formatTransferStatus(
+        dl.loadedBytes,
+        dl.totalBytes,
+        meta.speedBps || 0,
+      );
+    }
     if (statusText) dl.status = statusText;
 
     if (dl.element) {
       const bar = dl.element.querySelector(".dbd-item-bar");
       const pctEl = dl.element.querySelector(".dbd-item-percent");
       const statusEl = dl.element.querySelector(".dbd-item-status");
-      if (bar) bar.style.width = `${dl.progress}%`;
-      if (pctEl) pctEl.textContent = `${dl.progress}%`;
-      if (statusEl && statusText) statusEl.textContent = statusText;
+      if (bar) {
+        bar.style.width = `${dl.progress}%`;
+      }
+      if (pctEl) {
+        pctEl.textContent = hasKnownTotal
+          ? `${dl.progress}%`
+          : formatBytesToMB(dl.loadedBytes);
+      }
+      if (statusEl && dl.status) {
+        statusEl.textContent = dl.status;
+      }
     }
 
     this.updateOverallProgress();
@@ -257,9 +300,12 @@ class DownloadBubbleManager {
     const dl = this.activeDownloads.get(id);
     if (!dl) return;
 
-    const displayMsg = message || t("status-saved");
+    const finalSizeStr =
+      dl.loadedBytes > 0
+        ? `${formatBytesToMB(dl.loadedBytes)} • ${message || t("status-saved")}`
+        : message || t("status-saved");
     dl.progress = 100;
-    dl.status = displayMsg;
+    dl.status = finalSizeStr;
 
     if (dl.element) {
       dl.element.classList.add("completed");
@@ -268,8 +314,8 @@ class DownloadBubbleManager {
       const statusEl = dl.element.querySelector(".dbd-item-status");
       const cancelBtn = dl.element.querySelector(".dbd-item-cancel");
       if (bar) bar.style.width = "100%";
-      if (pctEl) pctEl.textContent = "✓";
-      if (statusEl) statusEl.textContent = displayMsg;
+      if (pctEl) pctEl.textContent = "100% ✓";
+      if (statusEl) statusEl.textContent = finalSizeStr;
       if (cancelBtn) cancelBtn.style.display = "none";
     }
 
