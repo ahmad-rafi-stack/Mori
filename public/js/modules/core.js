@@ -3,7 +3,7 @@ import { translations, getInitialLanguage } from "../i18n/index.js";
 import { Filesystem } from "../utils/index.js";
 
 export const APP_VERSION = "4.5.1";
-export const GITHUB_REPO = "coflyn/Mori";
+export const GITHUB_REPO = "ahmad-rafi-stack/Mori";
 export const UPDATE_CHECK_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
 export const REPO_URL = `https://github.com/${GITHUB_REPO}`;
 

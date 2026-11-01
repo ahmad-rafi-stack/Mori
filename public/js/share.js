@@ -833,11 +833,18 @@ function generateFilename(title, type, index, author = "") {
     effectiveTitle = `${effectiveTitle}_${Number(index) + 1}`;
   }
 
+  // Deteksi indeks nomor slide foto (_1, _2, dst.) agar tidak hilang
+  const slideSuffixMatch = effectiveTitle.match(/(_\d+)$/);
+  const slideSuffix = slideSuffixMatch ? slideSuffixMatch[1] : "";
+  if (slideSuffix) {
+    effectiveTitle = effectiveTitle.slice(0, -slideSuffix.length);
+  }
+
   // Bersihkan hashtag
   effectiveTitle = effectiveTitle.replace(/#[^\s#]+/g, "");
 
   let sanitized = (effectiveTitle || "")
-    .replace(/[\\/:*?"<>|#%&{}[\]$^+=~`';,!]/g, "")
+    .replace(/[\\/:*?"<>|#%&{}\[\]$^+=~`';,!]/g, "")
     .replace(/[^\w\s\-().@\u4e00-\u9fa5\u3040-\u30ff\uac00-\ud7af]/gi, "")
     .trim()
     .replace(/\s+/g, " ");
@@ -855,7 +862,7 @@ function generateFilename(title, type, index, author = "") {
 
   let rawAuthor = String(author || "").trim();
   let cleanAuthor = rawAuthor
-    .replace(/[\\/:*?"<>|#%&{}[\]$^+=~`';,!]/g, "")
+    .replace(/[\\/:*?"<>|#%&{}\[\]$^+=~`';,!]/g, "")
     .replace(/[^\w\s\-().@\u4e00-\u9fa5\u3040-\u30ff\uac00-\ud7af]/gi, "")
     .trim();
 
@@ -869,12 +876,19 @@ function generateFilename(title, type, index, author = "") {
     if (!cleanAuthor.startsWith("@")) {
       cleanAuthor = `@${cleanAuthor}`;
     }
-    sanitized = sanitized.substring(0, 55).trim();
-    if (!sanitized.includes(`(${cleanAuthor})`)) {
-      sanitized = sanitized ? `${sanitized} (${cleanAuthor})` : cleanAuthor;
+    const maxLen = slideSuffix ? 50 : 55;
+    const trimmedCaption = sanitized.substring(0, maxLen).trim();
+    if (!trimmedCaption.includes(`(${cleanAuthor})`)) {
+      sanitized = trimmedCaption
+        ? `${trimmedCaption}${slideSuffix} (${cleanAuthor})`
+        : `${cleanAuthor}${slideSuffix}`;
+    } else {
+      sanitized = `${trimmedCaption}${slideSuffix}`;
     }
   } else {
-    sanitized = sanitized.substring(0, 60).trim();
+    const maxLen = slideSuffix ? 50 : 60;
+    const trimmedCaption = sanitized.substring(0, maxLen).trim();
+    sanitized = `${trimmedCaption}${slideSuffix}`;
   }
 
   if (!sanitized) sanitized = "Mori_Media";

@@ -1,3 +1,4 @@
+import { sanitizeTitle } from "../downloader/filename.js";
 // download.js — main download flow (analyze + batch download)
 import { translations, t } from "../i18n/index.js";
 import { convertImagesToPdf } from "../utils/pdfHelper.js";
@@ -364,11 +365,11 @@ downloadBtn.addEventListener("click", async () => {
                         return;
                       }
 
-                      const sanitizedTitle =
-                        itemTitle
-                          .replace(/[\\/:*?"<>|#%&{}\[\]@$^+=~`';,]/g, "")
-                          .trim()
-                          .substring(0, 60) || "Mori_Batch_Album";
+                      const sanitizedTitle = sanitizeTitle(
+                        itemTitle || "Mori_Batch_Album",
+                        "PDF",
+                        itemAuthor || "",
+                      );
                       const pdfFileName = `${sanitizedTitle}.pdf`;
                       if (
                         window.Capacitor?.isNativePlatform?.() &&
