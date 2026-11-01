@@ -1,3 +1,4 @@
+import { syncAllSettingsToNative } from "./nativeSync.js";
 // storage.js — download paths, storage calculation, cache clearing, and data management
 import {
   Filesystem,
@@ -318,7 +319,12 @@ export async function exportMoriBackup() {
     if (Filesystem && window.Capacitor?.isNativePlatform?.()) {
       const folder = customPath || "Download/Mori";
       const targetPath = `${folder}/${fileName}`;
-      const base64Data = btoa(unescape(encodeURIComponent(jsonStr)));
+      const utf8Bytes = new TextEncoder().encode(jsonStr);
+      let binaryStr = "";
+      for (let i = 0; i < utf8Bytes.length; i++) {
+        binaryStr += String.fromCharCode(utf8Bytes[i]);
+      }
+      const base64Data = btoa(binaryStr);
       let saved = false;
 
       for (const dir of ["EXTERNAL_STORAGE", "DOCUMENTS", "EXTERNAL"]) {
@@ -401,8 +407,33 @@ export function importMoriBackupFromFile(file) {
           currentHistory.map((item) => item?.url).filter(Boolean),
         );
         const merged = [...currentHistory];
+        const isValidBackupUrl = (str) => {
+          if (!str || typeof str !== "string") return false;
+          const s = str.trim().toLowerCase();
+          if (
+            s.startsWith("javascript:") ||
+            s.startsWith("vbscript:") ||
+            s.startsWith("data:text/html")
+          ) {
+            return false;
+          }
+          return (
+            s.startsWith("http://") ||
+            s.startsWith("https://") ||
+            s.startsWith("data:image/") ||
+            s.startsWith("file:") ||
+            s.startsWith("_capacitor_file_") ||
+            s.startsWith("thumb_") ||
+            s.startsWith("/")
+          );
+        };
+
         for (const item of incomingHistory) {
           if (item && typeof item === "object") {
+            if (item.url && !isValidBackupUrl(item.url)) continue;
+            if (item.thumbnail && !isValidBackupUrl(item.thumbnail)) {
+              delete item.thumbnail;
+            }
             if (!item.url || !seenUrls.has(item.url)) {
               if (item.url) seenUrls.add(item.url);
               merged.push(item);
@@ -428,9 +459,13 @@ export function importMoriBackupFromFile(file) {
         if (k === "mori_history" || k === "mori_gallery_thumbs") continue;
         const val = dataObj[k];
         if (val !== undefined && val !== null) {
-          localStorage.setItem(k, String(val));
+          try {
+            localStorage.setItem(k, String(val));
+          } catch (_) {}
         }
       }
+
+      syncAllSettingsToNative();
 
       invalidateGalleryCache();
       updateDlStatsDisplay();

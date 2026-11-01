@@ -107,6 +107,16 @@ export function buildDownloadHeaders(actualDownloadUrl, sourceUrl, url) {
     }
   }
 
+  if (
+    actualDownloadUrl.includes("tikdownloader") ||
+    actualDownloadUrl.includes("snapcdn") ||
+    actualDownloadUrl.includes("tikcdn")
+  ) {
+    downloadHeaders["Referer"] = "https://tikdownloader.io/";
+  } else if (actualDownloadUrl.includes("tiktokio")) {
+    downloadHeaders["Referer"] = "https://tiktokio.com/";
+  }
+
   if (isTwitter) {
     if (actualDownloadUrl.includes("twimg.com")) {
       downloadHeaders["Referer"] = "https://twitter.com/";

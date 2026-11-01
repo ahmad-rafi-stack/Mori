@@ -57,6 +57,7 @@ export async function startNativeDownload(
   btn,
   sourceUrl,
   resetCancelFlag = true,
+  author = "",
 ) {
   if (!url || typeof url !== "string" || !url.trim()) {
     showToast(
@@ -334,7 +335,7 @@ export async function startNativeDownload(
         cleanTypeLabel.replace(/^\d+\.\s+/, "").trim() || cleanTypeLabel;
     }
 
-    const sanitizedTitle = sanitizeTitle(title, type);
+    const sanitizedTitle = sanitizeTitle(title, type, author);
     let fileName = generateFileName(sanitizedTitle, ext, sourceUrl, url);
 
     const isAudio = /mp3|audio|128k|48k|m4a|wav|flac/i.test(type);

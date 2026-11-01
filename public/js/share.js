@@ -420,7 +420,7 @@ async function triggerDownload(dlItem, title, idx) {
     if (badge) badge.textContent = lang["label-saving"] || "SAVING...";
   }
 
-  const filename = generateFilename(title, dlItem.type, idx);
+  const filename = generateFilename(title, dlItem.type, idx, activeResult?.author || "");
   const folder = getFolderForPlatform(currentPlatform);
 
   let finalUrl = dlItem.url;
@@ -813,7 +813,7 @@ function getFolderForPlatform(platform) {
   return autoFolder && sub ? `${base}/${sub}` : base;
 }
 
-function generateFilename(title, type, index) {
+function generateFilename(title, type, index, author = "") {
   const cleanTypeLabel = (type || "")
     .replace(/\s*\[(MP3|MP4|JPG|PNG|WEBP|Cover|Audio|Video)\]/gi, "")
     .trim();
@@ -833,12 +833,49 @@ function generateFilename(title, type, index) {
     effectiveTitle = `${effectiveTitle}_${Number(index) + 1}`;
   }
 
+  // Bersihkan hashtag
+  effectiveTitle = effectiveTitle.replace(/#[^\s#]+/g, "");
+
   let sanitized = (effectiveTitle || "")
-    .replace(/[\\/:*?"<>|#%&{}[\]@$^+=~`';,]/g, "")
-    .replace(/[^\w\s\-.\u4e00-\u9fa5\u3040-\u30ff\uac00-\ud7af]/gi, "")
+    .replace(/[\\/:*?"<>|#%&{}[\]$^+=~`';,!]/g, "")
+    .replace(/[^\w\s\-().@\u4e00-\u9fa5\u3040-\u30ff\uac00-\ud7af]/gi, "")
     .trim()
-    .replace(/\s+/g, " ")
-    .substring(0, 60);
+    .replace(/\s+/g, " ");
+
+  const genericPlaceholders = [
+    "unknown",
+    "tiktok user",
+    "douyin user",
+    "rednote creator",
+    "bilibili creator",
+    "facebook media",
+    "creator",
+    "user",
+  ];
+
+  let rawAuthor = String(author || "").trim();
+  let cleanAuthor = rawAuthor
+    .replace(/[\\/:*?"<>|#%&{}[\]$^+=~`';,!]/g, "")
+    .replace(/[^\w\s\-().@\u4e00-\u9fa5\u3040-\u30ff\uac00-\ud7af]/gi, "")
+    .trim();
+
+  const authorLower = cleanAuthor.replace(/^@+/, "").toLowerCase();
+  const isValidAuthor =
+    cleanAuthor.length > 0 &&
+    authorLower.length > 0 &&
+    !genericPlaceholders.includes(authorLower);
+
+  if (isValidAuthor) {
+    if (!cleanAuthor.startsWith("@")) {
+      cleanAuthor = `@${cleanAuthor}`;
+    }
+    sanitized = sanitized.substring(0, 55).trim();
+    if (!sanitized.includes(`(${cleanAuthor})`)) {
+      sanitized = sanitized ? `${sanitized} (${cleanAuthor})` : cleanAuthor;
+    }
+  } else {
+    sanitized = sanitized.substring(0, 60).trim();
+  }
 
   if (!sanitized) sanitized = "Mori_Media";
 
@@ -927,6 +964,7 @@ function saveHistory(result, url) {
 
     const newItem = {
       title: cleanTitle,
+      author: result.author || (existing ? existing.author || "" : ""),
       thumbnail: thumb,
       url: url,
       sourceUrl: result.sourceUrl || url,

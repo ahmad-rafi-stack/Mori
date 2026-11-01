@@ -31,7 +31,7 @@ export function formatBytesToMB(bytes) {
   return `${mb.toFixed(1)} MB`;
 }
 
-export function formatTransferStatus(loadedBytes, totalBytes, speedBps = 0) {
+function formatTransferStatus(loadedBytes, totalBytes, speedBps = 0) {
   const loadedStr = formatBytesToMB(loadedBytes);
   const speedStr =
     speedBps > 0 ? ` • ${formatBytesToMB(speedBps)}/s` : "";
@@ -182,7 +182,7 @@ function enhanceDownloadOptions() {
     } else if (idx < MAX_PROBE_ITEMS && dl.url && dl.url.startsWith("http")) {
       const headers = buildDownloadHeaders(dl.url, latestItem?.url || rawUrl, dl.url);
       enqueueSizeProbe(dl.url, headers).then((sz) => {
-        if (sz > 0 && btn.contains(szSpan)) {
+        if (sz > 10240 && btn.contains(szSpan)) {
           szSpan.textContent = ` (${formatBytesToMB(sz)})`;
         }
       });

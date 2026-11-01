@@ -929,13 +929,6 @@
             const url = a.browser_download_url;
             if (n.endsWith(".apk")) {
               assets.android = url;
-            } else if (n.endsWith(".dmg")) {
-              assets.macos = url;
-            } else if (
-              n.endsWith("Setup.exe") ||
-              (n.endsWith(".exe") && !assets.windows)
-            ) {
-              assets.windows = url;
             } else if (n.endsWith(".ipa")) {
               assets.ios = url;
             }

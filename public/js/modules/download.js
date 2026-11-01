@@ -296,6 +296,7 @@ downloadBtn.addEventListener("click", async () => {
             const itemTitle = decodeHtmlEntities(
               item.data.result?.title || "Media",
             );
+            const itemAuthor = item.data.result?.author || "";
 
             if (downloadsList.length > 0) {
               const isVideoPost = downloadsList.some(
@@ -322,6 +323,7 @@ downloadBtn.addEventListener("click", async () => {
                   null,
                   item.url,
                   false, // don't reset cancel flag
+                  itemAuthor,
                 );
               } else {
                 if (batchPhotoMode === "first") {
@@ -340,6 +342,7 @@ downloadBtn.addEventListener("click", async () => {
                     null,
                     item.url,
                     false,
+                    itemAuthor,
                   );
                 } else if (batchPhotoMode === "pdf") {
                   const imageItems = downloadsList.filter(
@@ -422,6 +425,7 @@ downloadBtn.addEventListener("click", async () => {
                           null,
                           item.url,
                           false,
+                          itemAuthor,
                         );
                       }
                     }
@@ -441,6 +445,7 @@ downloadBtn.addEventListener("click", async () => {
                       null,
                       item.url,
                       false,
+                      itemAuthor,
                     );
                   }
                 } else {
@@ -465,6 +470,7 @@ downloadBtn.addEventListener("click", async () => {
                       null,
                       item.url,
                       false,
+                      itemAuthor,
                     );
                   }
                 }

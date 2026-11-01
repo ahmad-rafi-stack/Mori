@@ -431,6 +431,7 @@ export function saveToHistory(result, url) {
 
   const newItem = {
     title: cleanTitle,
+    author: result.author || (existingItem ? existingItem.author || "" : ""),
     thumbnail: thumb,
     url: url, // Keep the latest URL version
     sourceUrl: result.sourceUrl || url,

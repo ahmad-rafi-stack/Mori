@@ -35,6 +35,17 @@ export async function deleteSavedFile(savedFile, directoriesToTry) {
  */
 export async function probeContentLength(url, headers = {}) {
   if (!url || typeof url !== "string" || !url.startsWith("http")) return 0;
+  const isInvalidContentType = (ct) => {
+    const s = String(ct || "").toLowerCase();
+    return (
+      s.includes("text/html") ||
+      s.includes("text/plain") ||
+      s.includes("application/json") ||
+      s.includes("application/problem+json")
+    );
+  };
+
+  // 1. HEAD request via CapacitorHttp
   try {
     if (CapacitorHttp?.request) {
       const headRes = await CapacitorHttp.request({
@@ -44,16 +55,25 @@ export async function probeContentLength(url, headers = {}) {
         connectTimeout: 6000,
         readTimeout: 6000,
       });
-      const h = headRes?.headers || {};
-      const lenVal =
-        h["content-length"] ||
-        h["Content-Length"] ||
-        h["Content-length"] ||
-        0;
-      const parsed = parseInt(lenVal, 10);
-      if (parsed > 0) return parsed;
+      const status = headRes?.status || 0;
+      if (status >= 200 && status < 400) {
+        const h = headRes?.headers || {};
+        const ct =
+          h["content-type"] || h["Content-Type"] || h["Content-type"] || "";
+        if (!isInvalidContentType(ct)) {
+          const lenVal =
+            h["content-length"] ||
+            h["Content-Length"] ||
+            h["Content-length"] ||
+            0;
+          const parsed = parseInt(lenVal, 10);
+          if (parsed > 10240) return parsed;
+        }
+      }
     }
   } catch (_) {}
+
+  // 2. HEAD request via fetch
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 5000);
   try {
@@ -62,13 +82,86 @@ export async function probeContentLength(url, headers = {}) {
       headers,
       signal: ctrl.signal,
     });
-    const lenHeader = res.headers.get("content-length");
-    const parsed = parseInt(lenHeader || "0", 10);
-    if (parsed > 0) return parsed;
+    if (res.status >= 200 && res.status < 400) {
+      const ct = res.headers.get("content-type") || "";
+      if (!isInvalidContentType(ct)) {
+        const lenHeader = res.headers.get("content-length");
+        const parsed = parseInt(lenHeader || "0", 10);
+        if (parsed > 10240) return parsed;
+      }
+    }
   } catch (_) {
   } finally {
     clearTimeout(timer);
   }
+
+  // 3. Fallback Range GET (bytes=0-0)
+  try {
+    if (CapacitorHttp?.request) {
+      const rangeRes = await CapacitorHttp.request({
+        method: "GET",
+        url,
+        headers: { ...headers, Range: "bytes=0-0" },
+        connectTimeout: 5000,
+        readTimeout: 5000,
+      });
+      const status = rangeRes?.status || 0;
+      if (status >= 200 && status < 400) {
+        const h = rangeRes?.headers || {};
+        const ct =
+          h["content-type"] || h["Content-Type"] || h["Content-type"] || "";
+        if (!isInvalidContentType(ct)) {
+          const cr =
+            h["content-range"] ||
+            h["Content-Range"] ||
+            h["Content-range"] ||
+            "";
+          const match = cr.match(/\/(\d+)$/);
+          if (match && match[1]) {
+            const total = parseInt(match[1], 10);
+            if (total > 10240) return total;
+          }
+          const lenVal =
+            h["content-length"] ||
+            h["Content-Length"] ||
+            h["Content-length"] ||
+            0;
+          const parsed = parseInt(lenVal, 10);
+          if (parsed > 10240) return parsed;
+        }
+      }
+    }
+  } catch (_) {}
+
+  const rangeCtrl = new AbortController();
+  const rangeTimer = setTimeout(() => rangeCtrl.abort(), 5000);
+  try {
+    const rangeRes = await fetch(url, {
+      method: "GET",
+      headers: { ...headers, Range: "bytes=0-0" },
+      signal: rangeCtrl.signal,
+    });
+    if (rangeRes.status >= 200 && rangeRes.status < 400) {
+      const ct = rangeRes.headers.get("content-type") || "";
+      if (!isInvalidContentType(ct)) {
+        const cr = rangeRes.headers.get("content-range") || "";
+        const match = cr.match(/\/(\d+)$/);
+        if (match && match[1]) {
+          const total = parseInt(match[1], 10);
+          rangeCtrl.abort();
+          if (total > 10240) return total;
+        }
+        const lenHeader = rangeRes.headers.get("content-length");
+        const parsed = parseInt(lenHeader || "0", 10);
+        rangeCtrl.abort();
+        if (parsed > 10240) return parsed;
+      }
+    }
+  } catch (_) {
+  } finally {
+    clearTimeout(rangeTimer);
+  }
+
   return 0;
 }
 

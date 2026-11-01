@@ -43,7 +43,7 @@ export function resolveExtension(type, url) {
   return ext.toLowerCase();
 }
 
-export function sanitizeTitle(title, type) {
+export function sanitizeTitle(title, type, author = "") {
   const cleanTypeLabel = (type || "")
     .replace(/\s*\[(MP3|MP4|JPG|PNG|WEBP)\]/gi, "")
     .trim();
@@ -55,12 +55,50 @@ export function sanitizeTitle(title, type) {
       cleanTypeLabel.replace(/^\d+\.\s+/, "").trim() || cleanTypeLabel;
   }
 
+  // Bersihkan hashtag dari caption
+  effectiveTitle = effectiveTitle.replace(/#[^\s#]+/g, "");
+
   let sanitized = effectiveTitle
-    .replace(/[\\/:*?"<>|#%&{}[\]@$^+=~`';,]/g, "")
-    .replace(/[^\w\s\-.\u4e00-\u9fa5\u3040-\u30ff\uac00-\ud7af]/gi, "")
+    .replace(/[\\/:*?"<>|#%&{}[\]$^+=~`';,!]/g, "")
+    .replace(/[^\w\s\-().@\u4e00-\u9fa5\u3040-\u30ff\uac00-\ud7af]/gi, "")
     .trim()
-    .replace(/\s+/g, " ")
-    .substring(0, 60);
+    .replace(/\s+/g, " ");
+
+  const genericPlaceholders = [
+    "unknown",
+    "tiktok user",
+    "douyin user",
+    "rednote creator",
+    "bilibili creator",
+    "facebook media",
+    "creator",
+    "user",
+  ];
+
+  let rawAuthor = String(author || "").trim();
+  let cleanAuthor = rawAuthor
+    .replace(/[\\/:*?"<>|#%&{}[\]$^+=~`';,!]/g, "")
+    .replace(/[^\w\s\-().@\u4e00-\u9fa5\u3040-\u30ff\uac00-\ud7af]/gi, "")
+    .trim();
+
+  const authorLower = cleanAuthor.replace(/^@+/, "").toLowerCase();
+  const isValidAuthor =
+    cleanAuthor.length > 0 &&
+    authorLower.length > 0 &&
+    !genericPlaceholders.includes(authorLower);
+
+  if (isValidAuthor) {
+    if (!cleanAuthor.startsWith("@")) {
+      cleanAuthor = `@${cleanAuthor}`;
+    }
+    // Potong teks caption maksimal ~55 karakter agar tidak kepanjangan
+    sanitized = sanitized.substring(0, 55).trim();
+    if (!sanitized.includes(`(${cleanAuthor})`)) {
+      sanitized = sanitized ? `${sanitized} (${cleanAuthor})` : cleanAuthor;
+    }
+  } else {
+    sanitized = sanitized.substring(0, 60).trim();
+  }
 
   return sanitized || "Mori_Media";
 }
