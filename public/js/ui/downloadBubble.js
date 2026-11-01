@@ -1,6 +1,8 @@
 // downloadBubble.js — Floating Download Bubble with Multi-Download Dropup Manager
 import { t } from "../i18n/index.js";
 import { triggerHaptic } from "../utils/device.js";
+import { probeContentLength } from "../downloader/storage.js";
+import { buildDownloadHeaders } from "../downloader/headers.js";
 
 const escapeHtml = (s) =>
   String(s || "").replace(/[&<>"']/g, (m) =>
@@ -18,6 +20,89 @@ const truncateTitle = (s, max = 22) => {
   if (str.length <= max) return str;
   return str.slice(0, max).trim() + "...";
 };
+
+export function formatBytesToMB(bytes) {
+  if (typeof bytes !== "number" || isNaN(bytes) || bytes < 0) return "0.0 MB";
+  const mb = bytes / (1024 * 1024);
+  if (mb < 0.1 && bytes > 0) {
+    const kb = Math.max(1, Math.round(bytes / 1024));
+    return `${kb} KB`;
+  }
+  return `${mb.toFixed(1)} MB`;
+}
+
+export function formatTransferStatus(loadedBytes, totalBytes, speedBps = 0) {
+  const loadedStr = formatBytesToMB(loadedBytes);
+  const speedStr =
+    speedBps > 0 ? ` • ${formatBytesToMB(speedBps)}/s` : "";
+  if (totalBytes && totalBytes > 0) {
+    const totalStr = formatBytesToMB(totalBytes);
+    return `${loadedStr} / ${totalStr}${speedStr}`;
+  }
+  return `${loadedStr}${speedStr}`;
+}
+
+function injectOptionSizeStyles() {
+  if (typeof document === "undefined" || document.getElementById("mori-opt-size-styles")) return;
+  const style = document.createElement("style");
+  style.id = "mori-opt-size-styles";
+  style.textContent = `
+    .dl-opt-size {
+      opacity: 0.75;
+      font-size: 0.88em;
+      font-weight: 500;
+      margin-left: 5px;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+function enhanceDownloadOptions() {
+  if (typeof document === "undefined") return;
+  const downloadList = document.getElementById("downloadList");
+  if (!downloadList) return;
+
+  const btns = downloadList.querySelectorAll(".dl-item:not(.dl-all-btn)");
+  if (btns.length === 0) return;
+
+  const urlInput = document.getElementById("urlInput");
+  const rawUrl = (urlInput?.value?.trim() || window._moriActiveDownloadUrl || "").toLowerCase();
+
+  let historyList = [];
+  try {
+    historyList = JSON.parse(localStorage.getItem("mori_history") || "[]");
+  } catch (_) {}
+  const latestItem = historyList[0] || null;
+  const downloads = latestItem?.downloads || [];
+
+  btns.forEach((btn, idx) => {
+    if (btn.dataset.sizeEnhanced === "true") return;
+    btn.dataset.sizeEnhanced = "true";
+
+    const dl = downloads[idx];
+    const textSpan = btn.querySelector("span:not(.dl-all-title):not(.dl-badge)");
+    if (!textSpan) return;
+
+    let szSpan = textSpan.querySelector(".dl-opt-size");
+    if (!szSpan) {
+      szSpan = document.createElement("span");
+      szSpan.className = "dl-opt-size";
+      textSpan.appendChild(szSpan);
+    }
+
+    if (dl?.size) {
+      const formatted = typeof dl.size === "number" ? formatBytesToMB(dl.size) : dl.size;
+      szSpan.textContent = ` (${formatted})`;
+    } else if (dl?.url && dl.url.startsWith("http")) {
+      const headers = buildDownloadHeaders(dl.url, latestItem?.url || rawUrl, dl.url);
+      probeContentLength(dl.url, headers).then((sz) => {
+        if (sz > 0 && btn.contains(szSpan)) {
+          szSpan.textContent = ` (${formatBytesToMB(sz)})`;
+        }
+      }).catch(() => {});
+    }
+  });
+}
 
 class DownloadBubbleManager {
   constructor() {
@@ -48,13 +133,34 @@ class DownloadBubbleManager {
   init() {
     if (this.isShareOverlay()) return;
     if (document.readyState === "loading") {
-      document.addEventListener("DOMContentLoaded", () => this.ensureMounted());
+      document.addEventListener("DOMContentLoaded", () => {
+        this.ensureMounted();
+        this.initListObserver();
+      });
     } else {
       this.ensureMounted();
+      this.initListObserver();
     }
     window.addEventListener("mori_language_changed", () => {
       this.refreshTranslations();
     });
+  }
+
+  initListObserver() {
+    injectOptionSizeStyles();
+    const attachObserver = () => {
+      const downloadList = document.getElementById("downloadList");
+      if (downloadList) {
+        enhanceDownloadOptions();
+        const observer = new MutationObserver(() => {
+          enhanceDownloadOptions();
+        });
+        observer.observe(downloadList, { childList: true, subtree: true });
+      } else {
+        setTimeout(attachObserver, 250);
+      }
+    };
+    attachObserver();
   }
 
   refreshTranslations() {

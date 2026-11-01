@@ -31,6 +31,46 @@ export async function deleteSavedFile(savedFile, directoriesToTry) {
 }
 
 /**
+ * Probes Content-Length header if not yet reported by native stream
+ */
+export async function probeContentLength(url, headers = {}) {
+  if (!url || typeof url !== "string" || !url.startsWith("http")) return 0;
+  try {
+    if (CapacitorHttp?.request) {
+      const headRes = await CapacitorHttp.request({
+        method: "HEAD",
+        url,
+        headers,
+        connectTimeout: 6000,
+        readTimeout: 6000,
+      });
+      const h = headRes?.headers || {};
+      const lenVal =
+        h["content-length"] ||
+        h["Content-Length"] ||
+        h["Content-length"] ||
+        0;
+      const parsed = parseInt(lenVal, 10);
+      if (parsed > 0) return parsed;
+    }
+  } catch (_) {}
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5000);
+    const res = await fetch(url, {
+      method: "HEAD",
+      headers,
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    const lenHeader = res.headers.get("content-length");
+    const parsed = parseInt(lenHeader || "0", 10);
+    if (parsed > 0) return parsed;
+  } catch (_) {}
+  return 0;
+}
+
+/**
  * Executes file download using Tauri, Capacitor Filesystem, or CapacitorHttp fallback
  */
 export async function saveToStorage({
