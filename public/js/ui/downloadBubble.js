@@ -57,6 +57,81 @@ function injectOptionSizeStyles() {
   document.head.appendChild(style);
 }
 
+const MAX_CONCURRENT_PROBES = 3;
+const MAX_PROBE_ITEMS = 20;
+const probedSizeCache = new Map();
+const probeQueue = [];
+let activeProbeCount = 0;
+let historyRetryTimer = null;
+
+function enqueueSizeProbe(url, headers) {
+  if (probedSizeCache.has(url)) {
+    return Promise.resolve(probedSizeCache.get(url));
+  }
+  return new Promise((resolve) => {
+    probeQueue.push({ url, headers, resolve });
+    processProbeQueue();
+  });
+}
+
+function processProbeQueue() {
+  while (activeProbeCount < MAX_CONCURRENT_PROBES && probeQueue.length > 0) {
+    const task = probeQueue.shift();
+    if (probedSizeCache.has(task.url)) {
+      task.resolve(probedSizeCache.get(task.url));
+      continue;
+    }
+    activeProbeCount++;
+    probeContentLength(task.url, task.headers)
+      .then((sz) => {
+        if (sz > 0) probedSizeCache.set(task.url, sz);
+        task.resolve(sz);
+      })
+      .catch(() => {
+        task.resolve(0);
+      })
+      .finally(() => {
+        activeProbeCount--;
+        processProbeQueue();
+      });
+  }
+}
+
+function normalizeUrlForMatch(u) {
+  return String(u || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\?.*$/, "")
+    .replace(/\/+$/, "");
+}
+
+function findMatchingHistoryItem(historyList, rawUrl) {
+  if (!Array.isArray(historyList) || historyList.length === 0) return null;
+  const normRaw = normalizeUrlForMatch(rawUrl);
+  if (normRaw) {
+    const exact = historyList.find((item) => {
+      if (!item) return false;
+      const u1 = normalizeUrlForMatch(item.url);
+      const u2 = normalizeUrlForMatch(item.sourceUrl);
+      return (
+        u1 === normRaw ||
+        u2 === normRaw ||
+        (u1 && normRaw.includes(u1)) ||
+        (u2 && normRaw.includes(u2))
+      );
+    });
+    if (exact) return exact;
+  }
+  if (localStorage.getItem("mori_incognito") === "true") {
+    return null;
+  }
+  return historyList.reduce((latest, item) => {
+    if (!item) return latest;
+    if (!latest) return item;
+    return (item.timestamp || 0) > (latest.timestamp || 0) ? item : latest;
+  }, null);
+}
+
 function enhanceDownloadOptions() {
   if (typeof document === "undefined") return;
   const downloadList = document.getElementById("downloadList");
@@ -72,14 +147,25 @@ function enhanceDownloadOptions() {
   try {
     historyList = JSON.parse(localStorage.getItem("mori_history") || "[]");
   } catch (_) {}
-  const latestItem = historyList[0] || null;
+  const latestItem = findMatchingHistoryItem(historyList, rawUrl);
   const downloads = latestItem?.downloads || [];
+
+  if (downloads.length === 0 && localStorage.getItem("mori_incognito") !== "true") {
+    if (!historyRetryTimer) {
+      historyRetryTimer = setTimeout(() => {
+        historyRetryTimer = null;
+        enhanceDownloadOptions();
+      }, 150);
+    }
+    return;
+  }
 
   btns.forEach((btn, idx) => {
     if (btn.dataset.sizeEnhanced === "true") return;
+    const dl = downloads[idx];
+    if (!dl) return;
     btn.dataset.sizeEnhanced = "true";
 
-    const dl = downloads[idx];
     const textSpan = btn.querySelector("span:not(.dl-all-title):not(.dl-badge)");
     if (!textSpan) return;
 
@@ -90,16 +176,16 @@ function enhanceDownloadOptions() {
       textSpan.appendChild(szSpan);
     }
 
-    if (dl?.size) {
+    if (dl.size) {
       const formatted = typeof dl.size === "number" ? formatBytesToMB(dl.size) : dl.size;
       szSpan.textContent = ` (${formatted})`;
-    } else if (dl?.url && dl.url.startsWith("http")) {
+    } else if (idx < MAX_PROBE_ITEMS && dl.url && dl.url.startsWith("http")) {
       const headers = buildDownloadHeaders(dl.url, latestItem?.url || rawUrl, dl.url);
-      probeContentLength(dl.url, headers).then((sz) => {
+      enqueueSizeProbe(dl.url, headers).then((sz) => {
         if (sz > 0 && btn.contains(szSpan)) {
           szSpan.textContent = ` (${formatBytesToMB(sz)})`;
         }
-      }).catch(() => {});
+      });
     }
   });
 }

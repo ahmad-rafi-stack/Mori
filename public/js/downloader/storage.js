@@ -54,19 +54,21 @@ export async function probeContentLength(url, headers = {}) {
       if (parsed > 0) return parsed;
     }
   } catch (_) {}
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 5000);
   try {
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 5000);
     const res = await fetch(url, {
       method: "HEAD",
       headers,
       signal: ctrl.signal,
     });
-    clearTimeout(timer);
     const lenHeader = res.headers.get("content-length");
     const parsed = parseInt(lenHeader || "0", 10);
     if (parsed > 0) return parsed;
-  } catch (_) {}
+  } catch (_) {
+  } finally {
+    clearTimeout(timer);
+  }
   return 0;
 }
 

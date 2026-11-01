@@ -46,5 +46,6 @@ npm-debug.log*
 
 # Private Core Scrapers Source & Build Tools
 src-scrapers/
-scripts/
+scripts/*
+!scripts/check-syntax.js
 android/app/src/main/cpp/

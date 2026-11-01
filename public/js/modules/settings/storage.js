@@ -409,7 +409,17 @@ export function importMoriBackupFromFile(file) {
             }
           }
         }
-        merged.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+        merged.sort((a, b) => {
+          if (a?.favorite && !b?.favorite) return -1;
+          if (!a?.favorite && b?.favorite) return 1;
+          if (a?.favorite && b?.favorite) {
+            return (
+              (b.favTimestamp || b.timestamp || 0) -
+              (a.favTimestamp || a.timestamp || 0)
+            );
+          }
+          return (b?.timestamp || 0) - (a?.timestamp || 0);
+        });
         safeSetHistory(merged);
       }
 
@@ -717,6 +727,20 @@ function mountHistorySearchAndFilter() {
       rawHistory = JSON.parse(localStorage.getItem("mori_history") || "[]");
     } catch (_) {}
 
+    const sortedHistory = Array.isArray(rawHistory)
+      ? [...rawHistory].sort((a, b) => {
+          if (a?.favorite && !b?.favorite) return -1;
+          if (!a?.favorite && b?.favorite) return 1;
+          if (a?.favorite && b?.favorite) {
+            return (
+              (b.favTimestamp || b.timestamp || 0) -
+              (a.favTimestamp || a.timestamp || 0)
+            );
+          }
+          return 0;
+        })
+      : [];
+
     const children = Array.from(historyList.children).filter(
       (el) => !el.classList.contains("mori-history-filter-empty"),
     );
@@ -731,14 +755,20 @@ function mountHistorySearchAndFilter() {
     let visibleCount = 0;
 
     children.forEach((card, idx) => {
-      const rec = rawHistory[idx] || null;
+      const cardUrl =
+        card.querySelector("[data-url]")?.getAttribute("data-url") || "";
+      const rec =
+        (cardUrl &&
+          sortedHistory.find((item) => item && item.url === cardUrl)) ||
+        sortedHistory[idx] ||
+        null;
       const text = (card.textContent || "") + " " + (rec?.title || "") + " " + (rec?.url || "");
       const { fav, cat } = classifyHistoryRecord(rec, text);
 
       const matchesSearch = !q || text.toLowerCase().includes(q);
       const matchesTab =
         activeTab === "all" ||
-        (activeTab === "fav" && (fav || card.querySelector(".fav-active, .active"))) ||
+        (activeTab === "fav" && (fav || card.querySelector(".hist-fav-btn.active"))) ||
         activeTab === cat;
 
       if (matchesSearch && matchesTab) {
@@ -784,12 +814,14 @@ function mountHistorySearchAndFilter() {
   });
   obs.observe(historyList, { childList: true });
 
-  window.addEventListener("mori:langchange", () => {
+  window.addEventListener("mori_language_changed", () => {
     if (searchInput) searchInput.placeholder = getHistoryFilterText("searchPlaceholder");
     bar.querySelectorAll(".mori-history-chip").forEach((chip) => {
       const tab = chip.getAttribute("data-tab");
       if (tab) chip.textContent = getHistoryFilterText(tab);
     });
+    const emptyEl = historyList.querySelector(".mori-history-filter-empty");
+    if (emptyEl) emptyEl.textContent = getHistoryFilterText("emptyMatch");
   });
 
   applyFilter();
