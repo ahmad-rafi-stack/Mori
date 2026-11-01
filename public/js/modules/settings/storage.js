@@ -100,28 +100,8 @@ export async function updateStorageInfo() {
 
   try {
     let totalSize = 0;
-    const tauriInvoke =
-      window.__TAURI__?.core?.invoke ||
-      window.__TAURI_INTERNALS__?.invoke ||
-      window.__TAURI__?.invoke;
 
-    if (tauriInvoke) {
-      try {
-        const vSize = await tauriInvoke("tauri_get_folder_size", {
-          folder: customPath || "Download/Mori",
-        });
-        if (typeof vSize === "number") totalSize += vSize;
-
-        if (customMusicPath && customMusicPath !== customPath) {
-          const mSize = await tauriInvoke("tauri_get_folder_size", {
-            folder: customMusicPath,
-          });
-          if (typeof mSize === "number") totalSize += mSize;
-        }
-      } catch (err) {
-        console.warn("Tauri folder size error:", err);
-      }
-    } else if (Filesystem) {
+    if (Filesystem) {
       totalSize += await getFolderSize("", "CACHE");
       const vPath = customPath || "Download/Mori";
       const mPath = customMusicPath || "Music/Mori";
@@ -528,14 +508,296 @@ function mountBackupRestoreItems() {
   });
 }
 
+
+const HISTORY_FILTER_I18N = {
+  en: {
+    searchPlaceholder: "Search history title or platform...",
+    all: "All",
+    fav: "Favorites",
+    video: "Video",
+    audio: "Music",
+    doc: "Comic / Image",
+    emptyMatch: "No matching history items",
+  },
+  id: {
+    searchPlaceholder: "Cari judul riwayat atau platform...",
+    all: "Semua",
+    fav: "Favorit",
+    video: "Video",
+    audio: "Musik",
+    doc: "Komik / Gambar",
+    emptyMatch: "Tidak ada riwayat yang cocok",
+  },
+  ja: {
+    searchPlaceholder: "履歴のタイトルやサイトを検索...",
+    all: "すべて",
+    fav: "お気に入り",
+    video: "動画",
+    audio: "音楽",
+    doc: "コミック / 画像",
+    emptyMatch: "一致する履歴がありません",
+  },
+  ko: {
+    searchPlaceholder: "기록 제목 또는 플랫폼 검색...",
+    all: "전체",
+    fav: "즐겨찾기",
+    video: "동영상",
+    audio: "음악",
+    doc: "코믹 / 이미지",
+    emptyMatch: "일치하는 기록이 없습니다",
+  },
+  zh: {
+    searchPlaceholder: "搜索历史标题或平台...",
+    all: "全部",
+    fav: "收藏",
+    video: "视频",
+    audio: "音乐",
+    doc: "漫画 / 图片",
+    emptyMatch: "没有匹配的历史记录",
+  },
+  ar: {
+    searchPlaceholder: "ابحث في السجل...",
+    all: "الكل",
+    fav: "المفضلة",
+    video: "فيديو",
+    audio: "موسيقى",
+    doc: "مانغا / صور",
+    emptyMatch: "لا توجد عناصر مطابقة",
+  },
+  ru: {
+    searchPlaceholder: "Поиск по истории...",
+    all: "Все",
+    fav: "Избранное",
+    video: "Видео",
+    audio: "Музыка",
+    doc: "Комиксы / Фото",
+    emptyMatch: "Ничего не найдено",
+  },
+  tl: {
+    searchPlaceholder: "Maghanap sa history...",
+    all: "Lahat",
+    fav: "Paborito",
+    video: "Video",
+    audio: "Musika",
+    doc: "Komiks / Larawan",
+    emptyMatch: "Walang nahanap sa history",
+  },
+  hi: {
+    searchPlaceholder: "इतिहास में खोजें...",
+    all: "सभी",
+    fav: "पसंदीदा",
+    video: "वीडियो",
+    audio: "संगीत",
+    doc: "कॉमिक / चित्र",
+    emptyMatch: "कोई मिलान नहीं मिला",
+  },
+};
+
+function getHistoryFilterText(key) {
+  const dict = HISTORY_FILTER_I18N[currentLang] || HISTORY_FILTER_I18N.en;
+  return dict[key] || HISTORY_FILTER_I18N.en[key];
+}
+
+function classifyHistoryRecord(rec, cardText = "") {
+  if (!rec) return { fav: false, cat: "video" };
+  const isFav = Boolean(rec.favorite);
+  const files = Array.isArray(rec.localFiles) ? rec.localFiles : [];
+  const urlStr = ((rec.url || "") + " " + (rec.sourceUrl || "") + " " + cardText).toLowerCase();
+
+  for (const f of files) {
+    const t = (f.type || "").toUpperCase();
+    const p = (f.path || f.uri || "").toLowerCase();
+    if (t === "AUDIO" || /\.(mp3|m4a|wav|flac|ogg)$/.test(p)) {
+      return { fav: isFav, cat: "audio" };
+    }
+    if (t === "IMAGE" || t === "PDF" || /\.(pdf|jpe?g|png|webp|gif)$/.test(p)) {
+      return { fav: isFav, cat: "doc" };
+    }
+  }
+  if (/spotify|soundcloud|music\.apple|bandcamp|deezer/.test(urlStr)) {
+    return { fav: isFav, cat: "audio" };
+  }
+  if (/komiku|mangadex|bacakomik|kiryu|shinigami|pixiv|pinterest|\.pdf/.test(urlStr)) {
+    return { fav: isFav, cat: "doc" };
+  }
+  return { fav: isFav, cat: "video" };
+}
+
+function mountHistorySearchAndFilter() {
+  const historyList = document.querySelector(".history-list") || document.getElementById("historyList");
+  if (!historyList || document.getElementById("moriHistoryFilterBar")) return;
+
+  if (!document.getElementById("mori-history-filter-style")) {
+    const st = document.createElement("style");
+    st.id = "mori-history-filter-style";
+    st.textContent = `
+      .mori-history-filter-bar {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin: 8px 0 12px 0;
+      }
+      .mori-history-search-wrap {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 11px;
+        border-radius: 10px;
+        background: rgba(128, 128, 128, 0.08);
+        border: 1px solid rgba(128, 128, 128, 0.16);
+      }
+      .mori-history-search-wrap input {
+        flex: 1;
+        border: none;
+        background: transparent;
+        color: inherit;
+        font-size: 12.5px;
+        outline: none;
+      }
+      .mori-history-chips {
+        display: flex;
+        gap: 6px;
+        overflow-x: auto;
+        padding-bottom: 2px;
+        scrollbar-width: none;
+      }
+      .mori-history-chips::-webkit-scrollbar {
+        display: none;
+      }
+      .mori-history-chip {
+        border: 1px solid rgba(128, 128, 128, 0.22);
+        background: transparent;
+        color: inherit;
+        font-size: 11px;
+        font-weight: 600;
+        padding: 4px 10px;
+        border-radius: 999px;
+        cursor: pointer;
+        white-space: nowrap;
+        opacity: 0.72;
+        transition: all 0.15s ease;
+      }
+      .mori-history-chip.active {
+        opacity: 1;
+        background: var(--primary, #fff);
+        color: var(--on-primary, #000);
+        border-color: var(--primary, #fff);
+      }
+    `;
+    document.head.appendChild(st);
+  }
+
+  let activeTab = "all";
+  let searchQuery = "";
+
+  const bar = document.createElement("div");
+  bar.id = "moriHistoryFilterBar";
+  bar.className = "mori-history-filter-bar";
+  bar.innerHTML = `
+    <div class="mori-history-search-wrap">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" style="opacity:0.6;flex-shrink:0;">
+        <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+      </svg>
+      <input type="text" id="moriHistorySearchInput" placeholder="${getHistoryFilterText("searchPlaceholder")}" autocomplete="off" spellcheck="false" />
+    </div>
+    <div class="mori-history-chips">
+      <button type="button" class="mori-history-chip active" data-tab="all">${getHistoryFilterText("all")}</button>
+      <button type="button" class="mori-history-chip" data-tab="fav">${getHistoryFilterText("fav")}</button>
+      <button type="button" class="mori-history-chip" data-tab="video">${getHistoryFilterText("video")}</button>
+      <button type="button" class="mori-history-chip" data-tab="doc">${getHistoryFilterText("doc")}</button>
+      <button type="button" class="mori-history-chip" data-tab="audio">${getHistoryFilterText("audio")}</button>
+    </div>
+  `;
+
+  historyList.parentElement?.insertBefore(bar, historyList);
+
+  const applyFilter = () => {
+    let rawHistory = [];
+    try {
+      rawHistory = JSON.parse(localStorage.getItem("mori_history") || "[]");
+    } catch (_) {}
+
+    const children = Array.from(historyList.children).filter(
+      (el) => !el.classList.contains("mori-history-filter-empty"),
+    );
+
+    if (children.length === 0 || (children.length === 1 && children[0].classList.contains("empty-history"))) {
+      bar.style.display = "none";
+      return;
+    }
+    bar.style.display = "flex";
+
+    const q = searchQuery.trim().toLowerCase();
+    let visibleCount = 0;
+
+    children.forEach((card, idx) => {
+      const rec = rawHistory[idx] || null;
+      const text = (card.textContent || "") + " " + (rec?.title || "") + " " + (rec?.url || "");
+      const { fav, cat } = classifyHistoryRecord(rec, text);
+
+      const matchesSearch = !q || text.toLowerCase().includes(q);
+      const matchesTab =
+        activeTab === "all" ||
+        (activeTab === "fav" && (fav || card.querySelector(".fav-active, .active"))) ||
+        activeTab === cat;
+
+      if (matchesSearch && matchesTab) {
+        card.style.display = "";
+        visibleCount++;
+      } else {
+        card.style.display = "none";
+      }
+    });
+
+    let emptyEl = historyList.querySelector(".mori-history-filter-empty");
+    if (visibleCount === 0 && children.length > 0) {
+      if (!emptyEl) {
+        emptyEl = document.createElement("div");
+        emptyEl.className = "mori-history-filter-empty";
+        emptyEl.style.cssText = "text-align:center;padding:18px 10px;font-size:12px;opacity:0.65;";
+        historyList.appendChild(emptyEl);
+      }
+      emptyEl.textContent = getHistoryFilterText("emptyMatch");
+      emptyEl.style.display = "block";
+    } else if (emptyEl) {
+      emptyEl.style.display = "none";
+    }
+  };
+
+  const searchInput = bar.querySelector("#moriHistorySearchInput");
+  searchInput?.addEventListener("input", (e) => {
+    searchQuery = e.target.value || "";
+    applyFilter();
+  });
+
+  bar.querySelectorAll(".mori-history-chip").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      bar.querySelectorAll(".mori-history-chip").forEach((c) => c.classList.remove("active"));
+      chip.classList.add("active");
+      activeTab = chip.getAttribute("data-tab") || "all";
+      applyFilter();
+    });
+  });
+
+  const obs = new MutationObserver(() => {
+    applyFilter();
+  });
+  obs.observe(historyList, { childList: true });
+
+  window.addEventListener("mori:langchange", () => {
+    if (searchInput) searchInput.placeholder = getHistoryFilterText("searchPlaceholder");
+    bar.querySelectorAll(".mori-history-chip").forEach((chip) => {
+      const tab = chip.getAttribute("data-tab");
+      if (tab) chip.textContent = getHistoryFilterText(tab);
+    });
+  });
+
+  applyFilter();
+}
+
 export function initStorageSettings() {
   const isAndroid = window.Capacitor?.getPlatform?.() === "android";
   const isIos = window.Capacitor?.getPlatform?.() === "ios";
-  const isDesktop = Boolean(
-    window.__TAURI__?.core?.invoke ||
-    window.__TAURI_INTERNALS__?.invoke ||
-    window.__TAURI__?.invoke
-  );
 
   // 1. Initial display
   if (pathVal) pathVal.textContent = formatPathDisplay(customPath);
@@ -618,8 +880,6 @@ export function initStorageSettings() {
   const getVideoPresets = () => {
     if (isAndroid) {
       return ["Download/Mori", "Movies/Mori", "DCIM/Mori", "Download"];
-    } else if (isDesktop) {
-      return ["Movies/Mori", "Downloads/Mori", "Desktop/Mori"];
     }
     return ["Mori", "Videos"];
   };
@@ -627,8 +887,6 @@ export function initStorageSettings() {
   const getMusicPresets = () => {
     if (isAndroid) {
       return ["Download/Mori/Music", "Music/Mori", "Download/Mori"];
-    } else if (isDesktop) {
-      return ["Music/Mori", "Downloads/Mori"];
     }
     return ["Music", "Mori/Music"];
   };
@@ -637,7 +895,7 @@ export function initStorageSettings() {
   changePathBtn?.addEventListener("click", () => {
     const lang = translations[currentLang] || translations.en;
     const presets = getVideoPresets();
-    const canBrowse = isDesktop || isAndroid;
+    const canBrowse = isAndroid;
     const hasPerm = isAndroid && window.MoriMainBridge?.hasAllFilesPermission
       ? window.MoriMainBridge.hasAllFilesPermission()
       : true;
@@ -762,7 +1020,7 @@ export function initStorageSettings() {
   changeMusicPathBtn?.addEventListener("click", () => {
     const lang = translations[currentLang] || translations.en;
     const presets = getMusicPresets();
-    const canBrowse = isDesktop || isAndroid;
+    const canBrowse = isAndroid;
     const hasPerm = isAndroid && window.MoriMainBridge?.hasAllFilesPermission
       ? window.MoriMainBridge.hasAllFilesPermission()
       : true;
@@ -885,6 +1143,7 @@ export function initStorageSettings() {
 
   // 4b. Mount Backup & Restore (.json) Buttons
   mountBackupRestoreItems();
+  mountHistorySearchAndFilter();
 
   // 5. Manual Clear Cache Button
   clearCacheBtn?.addEventListener("click", () => {
