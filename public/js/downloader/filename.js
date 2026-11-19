@@ -4,20 +4,25 @@ export function resolveExtension(type, url) {
   const isAudio = /mp3|audio|128k|48k|m4a|wav|flac/i.test(type);
   const isImage =
     /image|photo|jpg|jpeg|png|webp/i.test(type) ||
-    /\.(jpg|jpeg|png|webp)/i.test(url);
+    /\.(jpg|jpeg|png|webp)/i.test(url) ||
+    /[?&]format=(jpg|jpeg|png|webp)\b/i.test(url);
   let ext = isAudio ? "mp3" : isImage ? "jpg" : "mp4";
   const typeStr = (type || "").toLowerCase();
   const urlLower = (url || "").toLowerCase();
+  const formatParam = urlLower.match(/[?&]format=(jpg|jpeg|png|webp)\b/i);
 
-  if (/\.png(\?|$)/i.test(urlLower) || typeStr.includes("png")) ext = "png";
-  else if (/\.webp(\?|$)/i.test(urlLower) || typeStr.includes("webp"))
+  if (/\.png(\?|$)/i.test(urlLower) || typeStr.includes("png") || formatParam?.[1] === "png")
+    ext = "png";
+  else if (/\.webp(\?|$)/i.test(urlLower) || typeStr.includes("webp") || formatParam?.[1] === "webp")
     ext = "webp";
   else if (/\.m4a(\?|$)/i.test(urlLower) || typeStr.includes("m4a")) ext = "m4a";
   else if (/\.mp3(\?|$)/i.test(urlLower) || typeStr.includes("mp3")) ext = "mp3";
   else if (
     /\.jpe?g(\?|$)/i.test(urlLower) ||
     typeStr.includes("jpg") ||
-    typeStr.includes("jpeg")
+    typeStr.includes("jpeg") ||
+    formatParam?.[1] === "jpg" ||
+    formatParam?.[1] === "jpeg"
   )
     ext = "jpg";
   else if (
@@ -100,7 +105,7 @@ export function sanitizeTitle(title, type, author = "") {
     }
     const maxLen = slideSuffix ? 50 : 55;
     const trimmedCaption = sanitized.substring(0, maxLen).trim();
-    if (!trimmedCaption.includes(`(${cleanAuthor})`)) {
+    if (!trimmedCaption.toLowerCase().includes(`(${cleanAuthor.toLowerCase()})`)) {
       sanitized = trimmedCaption
         ? `${trimmedCaption}${slideSuffix} (${cleanAuthor})`
         : `${cleanAuthor}${slideSuffix}`;
@@ -133,7 +138,10 @@ export function generateFileName(sanitizedTitle, ext, sourceUrl, url) {
       platform = "YouTube";
     else if (
       lowerUrl.includes("twitter") ||
-      /(?:^|[/.])x\.com(?:[/?#:]|$)/i.test(lowerUrl)
+      /(?:^|[/.])x\.com(?:[/?#:]|$)/i.test(lowerUrl) ||
+      lowerUrl.includes("fxtwitter.com") ||
+      lowerUrl.includes("vxtwitter.com") ||
+      lowerUrl.includes("fixupx.com")
     )
       platform = "Twitter";
     else if (lowerUrl.includes("facebook")) platform = "Facebook";
@@ -190,7 +198,10 @@ export function detectPlatformFolder(sourceUrl, url) {
   if (
     src.includes("twitter") ||
     /(?:^|[/.])x\.com(?:[/?#:]|$)/i.test(src) ||
-    /(?:^|[/.])t\.co(?:[/?#:]|$)/i.test(src)
+    /(?:^|[/.])t\.co(?:[/?#:]|$)/i.test(src) ||
+    src.includes("fxtwitter.com") ||
+    src.includes("vxtwitter.com") ||
+    src.includes("fixupx.com")
   )
     return "Twitter";
   if (

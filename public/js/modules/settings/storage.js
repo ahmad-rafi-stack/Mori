@@ -284,6 +284,14 @@ const BACKUP_I18N = {
   },
 };
 
+const BACKUP_BLOCKED_KEYS = new Set([
+  "mori_gallery_thumbs",
+  "mori_patched_scraper_bin",
+  "mori_active_scraper_version",
+]);
+const MAX_BACKUP_FILE_BYTES = 10 * 1024 * 1024;
+const MAX_SETTING_VAL_LENGTH = 50000;
+
 function getBackupText(key) {
   const dict = BACKUP_I18N[currentLang] || BACKUP_I18N.en;
   return dict[key] || BACKUP_I18N.en[key] || key;
@@ -294,7 +302,7 @@ export async function exportMoriBackup() {
     const settingsData = {};
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i);
-      if (k && k.startsWith("mori_") && k !== "mori_gallery_thumbs") {
+      if (k && k.startsWith("mori_") && !BACKUP_BLOCKED_KEYS.has(k)) {
         settingsData[k] = localStorage.getItem(k);
       }
     }
@@ -367,6 +375,10 @@ export async function exportMoriBackup() {
 
 export function importMoriBackupFromFile(file) {
   if (!file) return;
+  if (typeof file.size === "number" && file.size > MAX_BACKUP_FILE_BYTES) {
+    showToast(getBackupText("importError"));
+    return;
+  }
   const reader = new FileReader();
   reader.onload = (e) => {
     try {
@@ -431,12 +443,30 @@ export function importMoriBackupFromFile(file) {
         for (const item of incomingHistory) {
           if (item && typeof item === "object") {
             if (item.url && !isValidBackupUrl(item.url)) continue;
-            if (item.thumbnail && !isValidBackupUrl(item.thumbnail)) {
-              delete item.thumbnail;
+            const sanitizedItem = { ...item };
+            if (sanitizedItem.sourceUrl && !isValidBackupUrl(sanitizedItem.sourceUrl)) {
+              delete sanitizedItem.sourceUrl;
             }
-            if (!item.url || !seenUrls.has(item.url)) {
-              if (item.url) seenUrls.add(item.url);
-              merged.push(item);
+            if (sanitizedItem.thumbnail && !isValidBackupUrl(sanitizedItem.thumbnail)) {
+              delete sanitizedItem.thumbnail;
+            }
+            if (sanitizedItem.localThumbnail && !isValidBackupUrl(sanitizedItem.localThumbnail)) {
+              delete sanitizedItem.localThumbnail;
+            }
+            if (Array.isArray(sanitizedItem.downloads)) {
+              sanitizedItem.downloads = sanitizedItem.downloads
+                .filter((dl) => dl && typeof dl === "object" && (!dl.url || isValidBackupUrl(dl.url)))
+                .map((dl) => {
+                  const cleanDl = { ...dl };
+                  if (cleanDl.thumbnail && !isValidBackupUrl(cleanDl.thumbnail)) {
+                    delete cleanDl.thumbnail;
+                  }
+                  return cleanDl;
+                });
+            }
+            if (!sanitizedItem.url || !seenUrls.has(sanitizedItem.url)) {
+              if (sanitizedItem.url) seenUrls.add(sanitizedItem.url);
+              merged.push(sanitizedItem);
             }
           }
         }
@@ -454,13 +484,20 @@ export function importMoriBackupFromFile(file) {
         safeSetHistory(merged);
       }
 
-      // Restore other mori_* settings
+      // Restore other mori_* settings (skipping blocked executable/cache keys)
       for (const k of moriKeys) {
-        if (k === "mori_history" || k === "mori_gallery_thumbs") continue;
+        if (k === "mori_history" || BACKUP_BLOCKED_KEYS.has(k)) continue;
         const val = dataObj[k];
         if (val !== undefined && val !== null) {
+          let strVal = String(val);
+          if (strVal.length > MAX_SETTING_VAL_LENGTH) continue;
+          if (k === "mori_download_path" || k === "mori_music_path") {
+            if (strVal.includes("..") || /[\x00-\x1f]/.test(strVal)) continue;
+            strVal = normalizePathInput(strVal);
+            if (!strVal) continue;
+          }
           try {
-            localStorage.setItem(k, String(val));
+            localStorage.setItem(k, strVal);
           } catch (_) {}
         }
       }
@@ -643,26 +680,34 @@ function getHistoryFilterText(key) {
   return dict[key] || HISTORY_FILTER_I18N.en[key];
 }
 
-function classifyHistoryRecord(rec, cardText = "") {
+function classifyHistoryRecord(rec) {
   if (!rec) return { fav: false, cat: "video" };
   const isFav = Boolean(rec.favorite);
   const files = Array.isArray(rec.localFiles) ? rec.localFiles : [];
-  const urlStr = ((rec.url || "") + " " + (rec.sourceUrl || "") + " " + cardText).toLowerCase();
+  // Match platform domains against URLs only (never captions/titles) to avoid false categorization
+  const urlOnlyStr = ((rec.url || "") + " " + (rec.sourceUrl || "")).toLowerCase();
 
   for (const f of files) {
     const t = (f.type || "").toUpperCase();
     const p = (f.path || f.uri || "").toLowerCase();
-    if (t === "AUDIO" || /\.(mp3|m4a|wav|flac|ogg)$/.test(p)) {
+    if (t === "AUDIO" || t === "MP3" || /\.(mp3|m4a|wav|flac|ogg)$/.test(p)) {
       return { fav: isFav, cat: "audio" };
     }
-    if (t === "IMAGE" || t === "PDF" || /\.(pdf|jpe?g|png|webp|gif)$/.test(p)) {
+    if (t === "IMAGE" || t === "PHOTO" || t === "PDF" || /\.(pdf|jpe?g|png|webp|gif)$/.test(p)) {
       return { fav: isFav, cat: "doc" };
     }
   }
-  if (/spotify|soundcloud|music\.apple|bandcamp|deezer/.test(urlStr)) {
+  if (Array.isArray(rec.downloads) && rec.downloads.length > 0) {
+    const allPhotos = rec.downloads.every((d) => {
+      const dt = (d?.type || "").toUpperCase();
+      return dt === "PHOTO" || dt === "IMAGE" || dt.startsWith("PAGE ");
+    });
+    if (allPhotos) return { fav: isFav, cat: "doc" };
+  }
+  if (/spotify|soundcloud|music\.apple|bandcamp|deezer/.test(urlOnlyStr)) {
     return { fav: isFav, cat: "audio" };
   }
-  if (/komiku|mangadex|bacakomik|kiryu|shinigami|pixiv|pinterest|\.pdf/.test(urlStr)) {
+  if (/komiku|mangadex|bacakomik|kiryu|shinigami|pixiv|pinterest|\.pdf/.test(urlOnlyStr)) {
     return { fav: isFav, cat: "doc" };
   }
   return { fav: isFav, cat: "video" };
@@ -734,6 +779,34 @@ function mountHistorySearchAndFilter() {
 
   let activeTab = "all";
   let searchQuery = "";
+  let cachedSortedHistory = null;
+  let searchDebounceTimer = null;
+
+  const invalidateHistoryCache = () => {
+    cachedSortedHistory = null;
+  };
+
+  const getSortedHistory = () => {
+    if (cachedSortedHistory) return cachedSortedHistory;
+    let rawHistory = [];
+    try {
+      rawHistory = JSON.parse(localStorage.getItem("mori_history") || "[]");
+    } catch (_) {}
+    cachedSortedHistory = Array.isArray(rawHistory)
+      ? [...rawHistory].sort((a, b) => {
+          if (a?.favorite && !b?.favorite) return -1;
+          if (!a?.favorite && b?.favorite) return 1;
+          if (a?.favorite && b?.favorite) {
+            return (
+              (b.favTimestamp || b.timestamp || 0) -
+              (a.favTimestamp || a.timestamp || 0)
+            );
+          }
+          return 0;
+        })
+      : [];
+    return cachedSortedHistory;
+  };
 
   const bar = document.createElement("div");
   bar.id = "moriHistoryFilterBar";
@@ -757,24 +830,7 @@ function mountHistorySearchAndFilter() {
   historyList.parentElement?.insertBefore(bar, historyList);
 
   const applyFilter = () => {
-    let rawHistory = [];
-    try {
-      rawHistory = JSON.parse(localStorage.getItem("mori_history") || "[]");
-    } catch (_) {}
-
-    const sortedHistory = Array.isArray(rawHistory)
-      ? [...rawHistory].sort((a, b) => {
-          if (a?.favorite && !b?.favorite) return -1;
-          if (!a?.favorite && b?.favorite) return 1;
-          if (a?.favorite && b?.favorite) {
-            return (
-              (b.favTimestamp || b.timestamp || 0) -
-              (a.favTimestamp || a.timestamp || 0)
-            );
-          }
-          return 0;
-        })
-      : [];
+    const sortedHistory = getSortedHistory();
 
     const children = Array.from(historyList.children).filter(
       (el) => !el.classList.contains("mori-history-filter-empty"),
@@ -798,7 +854,7 @@ function mountHistorySearchAndFilter() {
         sortedHistory[idx] ||
         null;
       const text = (card.textContent || "") + " " + (rec?.title || "") + " " + (rec?.url || "");
-      const { fav, cat } = classifyHistoryRecord(rec, text);
+      const { fav, cat } = classifyHistoryRecord(rec);
 
       const matchesSearch = !q || text.toLowerCase().includes(q);
       const matchesTab =
@@ -832,7 +888,10 @@ function mountHistorySearchAndFilter() {
   const searchInput = bar.querySelector("#moriHistorySearchInput");
   searchInput?.addEventListener("input", (e) => {
     searchQuery = e.target.value || "";
-    applyFilter();
+    clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(() => {
+      applyFilter();
+    }, 150);
   });
 
   bar.querySelectorAll(".mori-history-chip").forEach((chip) => {
@@ -845,9 +904,14 @@ function mountHistorySearchAndFilter() {
   });
 
   const obs = new MutationObserver(() => {
+    invalidateHistoryCache();
     applyFilter();
   });
   obs.observe(historyList, { childList: true });
+
+  window.addEventListener("mori_history_updated", invalidateHistoryCache);
+  window.addEventListener("mori_favorite_toggled", invalidateHistoryCache);
+  window.addEventListener("mori_file_saved", invalidateHistoryCache);
 
   window.addEventListener("mori_language_changed", () => {
     if (searchInput) searchInput.placeholder = getHistoryFilterText("searchPlaceholder");

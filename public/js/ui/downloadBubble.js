@@ -31,17 +31,6 @@ export function formatBytesToMB(bytes) {
   return `${mb.toFixed(1)} MB`;
 }
 
-function formatTransferStatus(loadedBytes, totalBytes, speedBps = 0) {
-  const loadedStr = formatBytesToMB(loadedBytes);
-  const speedStr =
-    speedBps > 0 ? ` • ${formatBytesToMB(speedBps)}/s` : "";
-  if (totalBytes && totalBytes > 0) {
-    const totalStr = formatBytesToMB(totalBytes);
-    return `${loadedStr} / ${totalStr}${speedStr}`;
-  }
-  return `${loadedStr}${speedStr}`;
-}
-
 function injectOptionSizeStyles() {
   if (typeof document === "undefined" || document.getElementById("mori-opt-size-styles")) return;
   const style = document.createElement("style");
@@ -59,6 +48,7 @@ function injectOptionSizeStyles() {
 
 const MAX_CONCURRENT_PROBES = 3;
 const MAX_PROBE_ITEMS = 20;
+const MIN_DISPLAY_BYTES = 4096;
 const probedSizeCache = new Map();
 const probeQueue = [];
 let activeProbeCount = 0;
@@ -84,7 +74,7 @@ function processProbeQueue() {
     activeProbeCount++;
     probeContentLength(task.url, task.headers)
       .then((sz) => {
-        if (sz > 0) probedSizeCache.set(task.url, sz);
+        if (sz >= MIN_DISPLAY_BYTES) probedSizeCache.set(task.url, sz);
         task.resolve(sz);
       })
       .catch(() => {
@@ -132,22 +122,52 @@ function findMatchingHistoryItem(historyList, rawUrl) {
   }, null);
 }
 
+function resolveActiveResultItem(rawUrl) {
+  // 1. Prefer in-memory last scrape result (works in Incognito Mode too without touching localStorage)
+  const memResult = typeof window !== "undefined" ? window.__moriLastScrapeResult : null;
+  if (memResult && Array.isArray(memResult.downloads) && memResult.downloads.length > 0) {
+    const normRaw = normalizeUrlForMatch(rawUrl);
+    const normMem = normalizeUrlForMatch(memResult.sourceUrl || memResult.url);
+    if (!normRaw || !normMem || normMem === normRaw || normRaw.includes(normMem) || normMem.includes(normRaw)) {
+      return memResult;
+    }
+  }
+
+  // 2. Fallback to persisted history
+  let historyList = [];
+  try {
+    historyList = JSON.parse(localStorage.getItem("mori_history") || "[]");
+  } catch (_) {}
+  return findMatchingHistoryItem(historyList, rawUrl);
+}
+
+function isExportPdfButton(btn) {
+  if (!btn) return false;
+  if (btn.classList.contains("dl-pdf-btn") || btn.classList.contains("pdf-export-btn")) {
+    return true;
+  }
+  const txt = (btn.textContent || "").toLowerCase();
+  return txt.includes("export pdf") || txt.includes("pdf gallery") || txt.includes("ekspor pdf");
+}
+
 function enhanceDownloadOptions() {
   if (typeof document === "undefined") return;
   const downloadList = document.getElementById("downloadList");
   if (!downloadList) return;
 
-  const btns = downloadList.querySelectorAll(".dl-item:not(.dl-all-btn)");
+  const btns = Array.from(
+    downloadList.querySelectorAll(".dl-item:not(.dl-all-btn):not(.dl-pdf-btn)"),
+  ).filter((btn) => !isExportPdfButton(btn));
   if (btns.length === 0) return;
+
+  // Avoid unnecessary localStorage parsing if every button is already enhanced
+  const hasPending = btns.some((btn) => btn.dataset.sizeEnhanced !== "true");
+  if (!hasPending) return;
 
   const urlInput = document.getElementById("urlInput");
   const rawUrl = (urlInput?.value?.trim() || window._moriActiveDownloadUrl || "").toLowerCase();
 
-  let historyList = [];
-  try {
-    historyList = JSON.parse(localStorage.getItem("mori_history") || "[]");
-  } catch (_) {}
-  const latestItem = findMatchingHistoryItem(historyList, rawUrl);
+  const latestItem = resolveActiveResultItem(rawUrl);
   const downloads = latestItem?.downloads || [];
 
   if (downloads.length === 0 && localStorage.getItem("mori_incognito") !== "true") {
@@ -180,9 +200,9 @@ function enhanceDownloadOptions() {
       const formatted = typeof dl.size === "number" ? formatBytesToMB(dl.size) : dl.size;
       szSpan.textContent = ` (${formatted})`;
     } else if (idx < MAX_PROBE_ITEMS && dl.url && dl.url.startsWith("http")) {
-      const headers = buildDownloadHeaders(dl.url, latestItem?.url || rawUrl, dl.url);
+      const headers = buildDownloadHeaders(dl.url, latestItem?.sourceUrl || latestItem?.url || rawUrl, dl.url);
       enqueueSizeProbe(dl.url, headers).then((sz) => {
-        if (sz > 10240 && btn.contains(szSpan)) {
+        if (sz >= MIN_DISPLAY_BYTES && btn.contains(szSpan)) {
           szSpan.textContent = ` (${formatBytesToMB(sz)})`;
         }
       });
@@ -238,10 +258,11 @@ class DownloadBubbleManager {
       const downloadList = document.getElementById("downloadList");
       if (downloadList) {
         enhanceDownloadOptions();
+        // Observe direct children only so updating .dl-opt-size text doesn't self-trigger
         const observer = new MutationObserver(() => {
           enhanceDownloadOptions();
         });
-        observer.observe(downloadList, { childList: true, subtree: true });
+        observer.observe(downloadList, { childList: true });
       } else {
         setTimeout(attachObserver, 250);
       }
