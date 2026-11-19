@@ -442,7 +442,8 @@ export async function scrapeDouyin(url, ...rest) {
 
   if (res) {
     if (res.result) res.result.sourceUrl = originalUrl;
-    else if (res.sourceUrl) res.sourceUrl = originalUrl;
+    if (res.data) res.data.sourceUrl = originalUrl;
+    res.sourceUrl = originalUrl;
   }
   return rememberScrapeResult(res);
 }
