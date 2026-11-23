@@ -1,4 +1,5 @@
 // storage.js — download paths, storage calculation, cache clearing, and data management
+import { syncAllSettingsToNative } from "./nativeSync.js";
 import {
   Filesystem,
   showToast,
@@ -175,6 +176,435 @@ export async function clearCacheSilently() {
   } catch (e) {
     console.error("Silent cache clear failed:", e);
   }
+}
+
+export const BACKUP_I18N = {
+  en: {
+    exportLabel: "Export Backup (.json)",
+    importLabel: "Import Backup (.json)",
+    exportBtn: "EXPORT",
+    importBtn: "IMPORT",
+    exportSuccess: "Backup exported successfully",
+    exportSavedTo: "Backup saved to",
+    exportError: "Failed to export backup",
+    importSuccess: "Backup restored successfully",
+    importError: "Invalid or corrupted backup file",
+  },
+  id: {
+    exportLabel: "Ekspor Backup (.json)",
+    importLabel: "Impor Backup (.json)",
+    exportBtn: "EKSPOR",
+    importBtn: "IMPOR",
+    exportSuccess: "Backup berhasil diekspor",
+    exportSavedTo: "Backup disimpan ke",
+    exportError: "Gagal mengekspor backup",
+    importSuccess: "Backup berhasil dipulihkan",
+    importError: "File backup tidak valid atau rusak",
+  },
+  ja: {
+    exportLabel: "バックアップを書き出す (.json)",
+    importLabel: "バックアップを読み込む (.json)",
+    exportBtn: "書き出し",
+    importBtn: "読み込み",
+    exportSuccess: "バックアップを書き出しました",
+    exportSavedTo: "保存先:",
+    exportError: "バックアップの書き出しに失敗しました",
+    importSuccess: "バックアップを復元しました",
+    importError: "無効なバックアップファイルです",
+  },
+  ko: {
+    exportLabel: "백업 내보내기 (.json)",
+    importLabel: "백업 가져오기 (.json)",
+    exportBtn: "내보내기",
+    importBtn: "가져오기",
+    exportSuccess: "백업을 성공적으로 내보냈습니다",
+    exportSavedTo: "백업 저장 위치:",
+    exportError: "백업 내보내기 실패",
+    importSuccess: "백업이 복원되었습니다",
+    importError: "유효하지 않은 백업 파일입니다",
+  },
+  zh: {
+    exportLabel: "导出备份 (.json)",
+    importLabel: "导入备份 (.json)",
+    exportBtn: "导出",
+    importBtn: "导入",
+    exportSuccess: "备份导出成功",
+    exportSavedTo: "备份已保存至",
+    exportError: "导出备份失败",
+    importSuccess: "备份恢复成功",
+    importError: "备份文件无效或已损坏",
+  },
+  ar: {
+    exportLabel: "تصدير النسخة الاحتياطية (.json)",
+    importLabel: "استيراد النسخة الاحتياطية (.json)",
+    exportBtn: "تصدير",
+    importBtn: "استيراد",
+    exportSuccess: "تم تصدير النسخة الاحتياطية بنجاح",
+    exportSavedTo: "تم حفظ النسخة في",
+    exportError: "فشل تصدير النسخة الاحتياطية",
+    importSuccess: "تم استعادة النسخة الاحتياطية بنجاح",
+    importError: "ملف النسخة الاحتياطية غير صالح",
+  },
+  ru: {
+    exportLabel: "Экспорт резервной копии (.json)",
+    importLabel: "Импорт резервной копии (.json)",
+    exportBtn: "ЭКСПОРТ",
+    importBtn: "ИМПОРТ",
+    exportSuccess: "Резервная копия экспортирована",
+    exportSavedTo: "Сохранено в",
+    exportError: "Ошибка экспорта резервной копии",
+    importSuccess: "Резервная копия успешно восстановлена",
+    importError: "Неверный файл резервной копии",
+  },
+  tl: {
+    exportLabel: "I-export ang Backup (.json)",
+    importLabel: "I-import ang Backup (.json)",
+    exportBtn: "I-EXPORT",
+    importBtn: "I-IMPORT",
+    exportSuccess: "Matagumpay na na-export ang backup",
+    exportSavedTo: "Na-save ang backup sa",
+    exportError: "Nabigong i-export ang backup",
+    importSuccess: "Matagumpay na naibalik ang backup",
+    importError: "Hindi valid ang backup file",
+  },
+  hi: {
+    exportLabel: "बैकअप निर्यात करें (.json)",
+    importLabel: "बैकअप आयात करें (.json)",
+    exportBtn: "निर्यात",
+    importBtn: "आयात",
+    exportSuccess: "बैकअप सफलतापूर्वक निर्यात किया गया",
+    exportSavedTo: "बैकअप यहाँ सहेजा गया:",
+    exportError: "बैकअप निर्यात करने में विफल",
+    importSuccess: "बैकअप सफलतापूर्वक पुनर्स्थापित किया गया",
+    importError: "अमान्य बैकअप फ़ाइल",
+  },
+  es: {
+    exportLabel: "Exportar copia de seguridad (.json)",
+    importLabel: "Importar copia de seguridad (.json)",
+    exportBtn: "EXPORTAR",
+    importBtn: "IMPORTAR",
+    exportSuccess: "Copia de seguridad exportada con éxito",
+    exportSavedTo: "Copia de seguridad guardada en",
+    exportError: "Error al exportar la copia de seguridad",
+    importSuccess: "Copia de seguridad restaurada con éxito",
+    importError: "Archivo de copia de seguridad inválido o dañado",
+  },
+};
+
+export const BACKUP_BLOCKED_KEYS = new Set([
+  "mori_gallery_thumbs",
+  "mori_patched_scraper_bin",
+  "mori_active_scraper_version",
+  "mori_pin",
+  "mori_privacy_lock",
+  "mori_lock_type",
+]);
+const MAX_BACKUP_FILE_BYTES = 10 * 1024 * 1024;
+const MAX_SETTING_VAL_LENGTH = 50000;
+
+export function isValidBackupUrl(str) {
+  if (!str || typeof str !== "string") return false;
+  const s = str.trim().toLowerCase();
+  if (
+    s.startsWith("javascript:") ||
+    s.startsWith("vbscript:") ||
+    s.startsWith("data:text/html")
+  ) {
+    return false;
+  }
+  return (
+    s.startsWith("http://") ||
+    s.startsWith("https://") ||
+    s.startsWith("data:image/") ||
+    s.startsWith("file:") ||
+    s.startsWith("_capacitor_file_") ||
+    s.startsWith("thumb_") ||
+    s.startsWith("/") ||
+    s.startsWith("mori-tool://") ||
+    s.startsWith("spotidown_resolve:") ||
+    s.startsWith("soundloaders_resolve:") ||
+    s.startsWith("youtube_resolve:") ||
+    s.startsWith("ytmp3gg_resolve:") ||
+    s.startsWith("applemusic_resolve:")
+  );
+}
+
+function getBackupText(key) {
+  const dict = BACKUP_I18N[currentLang] || BACKUP_I18N.en;
+  return dict[key] || BACKUP_I18N.en[key] || key;
+}
+
+export async function exportMoriBackup() {
+  try {
+    const settingsData = {};
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith("mori_") && !BACKUP_BLOCKED_KEYS.has(k)) {
+        settingsData[k] = localStorage.getItem(k);
+      }
+    }
+
+    let historyList = [];
+    try {
+      historyList = JSON.parse(localStorage.getItem("mori_history") || "[]");
+    } catch (_) {}
+
+    const payload = {
+      app: "Mori",
+      backupFormatVersion: 1,
+      exportedAt: new Date().toISOString(),
+      historyCount: Array.isArray(historyList) ? historyList.length : 0,
+      data: settingsData,
+    };
+
+    const jsonStr = JSON.stringify(payload, null, 2);
+    const dateStamp = new Date().toISOString().split("T")[0];
+    const fileName = `Mori_Backup_${dateStamp}.json`;
+
+    if (Filesystem && window.Capacitor?.isNativePlatform?.()) {
+      const folder = customPath || "Download/Mori";
+      const targetPath = `${folder}/${fileName}`;
+      const utf8Bytes = new TextEncoder().encode(jsonStr);
+      let binaryStr = "";
+      for (let i = 0; i < utf8Bytes.length; i++) {
+        binaryStr += String.fromCharCode(utf8Bytes[i]);
+      }
+      const base64Data = btoa(binaryStr);
+      let saved = false;
+
+      for (const dir of ["EXTERNAL_STORAGE", "DOCUMENTS", "EXTERNAL"]) {
+        try {
+          await Filesystem.mkdir({
+            path: folder,
+            directory: dir,
+            recursive: true,
+          }).catch(() => {});
+          await Filesystem.writeFile({
+            path: targetPath,
+            data: base64Data,
+            directory: dir,
+          });
+          saved = true;
+          showToast(`${getBackupText("exportSavedTo")} /${targetPath}`);
+          break;
+        } catch (_) {}
+      }
+      if (saved) return true;
+    }
+
+    const blob = new Blob([jsonStr], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fileName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    showToast(getBackupText("exportSuccess"));
+    return true;
+  } catch (err) {
+    console.error("Export backup failed:", err);
+    showToast(getBackupText("exportError"));
+    return false;
+  }
+}
+
+export function importMoriBackupFromFile(file) {
+  if (!file) return;
+  if (typeof file.size === "number" && file.size > MAX_BACKUP_FILE_BYTES) {
+    showToast(getBackupText("importError"));
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const raw = String(e.target?.result || "");
+      const parsed = JSON.parse(raw);
+      const dataObj =
+        parsed && typeof parsed.data === "object" && parsed.data !== null
+          ? parsed.data
+          : parsed;
+
+      if (!dataObj || typeof dataObj !== "object") {
+        throw new Error("Invalid backup structure");
+      }
+
+      const moriKeys = Object.keys(dataObj).filter((k) => k.startsWith("mori_"));
+      if (moriKeys.length === 0 && !Array.isArray(parsed.history)) {
+        throw new Error("No Mori keys found in backup");
+      }
+
+      // Merge history records without losing existing items
+      let incomingHistory = [];
+      if (typeof dataObj.mori_history === "string") {
+        try {
+          incomingHistory = JSON.parse(dataObj.mori_history);
+        } catch (_) {}
+      } else if (Array.isArray(dataObj.mori_history)) {
+        incomingHistory = dataObj.mori_history;
+      } else if (Array.isArray(parsed.history)) {
+        incomingHistory = parsed.history;
+      }
+
+      if (Array.isArray(incomingHistory) && incomingHistory.length > 0) {
+        let currentHistory = [];
+        try {
+          currentHistory = JSON.parse(localStorage.getItem("mori_history") || "[]");
+        } catch (_) {}
+        const seenUrls = new Set(
+          currentHistory.map((item) => item?.url).filter(Boolean),
+        );
+        const merged = [...currentHistory];
+
+        for (const item of incomingHistory) {
+          if (item && typeof item === "object") {
+            if (item.url && !isValidBackupUrl(item.url)) continue;
+            const sanitizedItem = { ...item };
+            if (sanitizedItem.sourceUrl && !isValidBackupUrl(sanitizedItem.sourceUrl)) {
+              delete sanitizedItem.sourceUrl;
+            }
+            if (sanitizedItem.thumbnail && !isValidBackupUrl(sanitizedItem.thumbnail)) {
+              delete sanitizedItem.thumbnail;
+            }
+            if (sanitizedItem.localThumbnail && !isValidBackupUrl(sanitizedItem.localThumbnail)) {
+              delete sanitizedItem.localThumbnail;
+            }
+            if (Array.isArray(sanitizedItem.downloads)) {
+              sanitizedItem.downloads = sanitizedItem.downloads
+                .filter((dl) => dl && typeof dl === "object" && (!dl.url || isValidBackupUrl(dl.url)))
+                .map((dl) => {
+                  const cleanDl = { ...dl };
+                  if (cleanDl.thumbnail && !isValidBackupUrl(cleanDl.thumbnail)) {
+                    delete cleanDl.thumbnail;
+                  }
+                  return cleanDl;
+                });
+            }
+            if (!sanitizedItem.url || !seenUrls.has(sanitizedItem.url)) {
+              if (sanitizedItem.url) seenUrls.add(sanitizedItem.url);
+              merged.push(sanitizedItem);
+            }
+          }
+        }
+        merged.sort((a, b) => {
+          if (a?.favorite && !b?.favorite) return -1;
+          if (!a?.favorite && b?.favorite) return 1;
+          if (a?.favorite && b?.favorite) {
+            return (
+              (b.favTimestamp || b.timestamp || 0) -
+              (a.favTimestamp || a.timestamp || 0)
+            );
+          }
+          return (b?.timestamp || 0) - (a?.timestamp || 0);
+        });
+        safeSetHistory(merged);
+      }
+
+      // Restore other mori_* settings (skipping blocked sensitive/executable/cache keys)
+      for (const k of moriKeys) {
+        if (k === "mori_history" || BACKUP_BLOCKED_KEYS.has(k)) continue;
+        const val = dataObj[k];
+        if (val !== undefined && val !== null) {
+          let strVal = String(val);
+          if (strVal.length > MAX_SETTING_VAL_LENGTH) continue;
+          if (k === "mori_download_path" || k === "mori_music_path") {
+            if (strVal.includes("..") || /[\x00-\x1f]/.test(strVal)) continue;
+            strVal = normalizePathInput(strVal);
+            if (!strVal) continue;
+          }
+          try {
+            localStorage.setItem(k, strVal);
+          } catch (_) {}
+        }
+      }
+
+      syncAllSettingsToNative();
+
+      invalidateGalleryCache();
+      updateDlStatsDisplay();
+      renderHistory(onHistoryItemClick, onHistoryDeleteClick);
+      window.dispatchEvent(new CustomEvent("mori_history_updated"));
+      showToast(getBackupText("importSuccess"));
+      setTimeout(() => location.reload(), 1000);
+    } catch (err) {
+      console.error("Import backup error:", err);
+      showToast(getBackupText("importError"));
+    }
+  };
+  reader.readAsText(file);
+}
+
+function mountBackupRestoreItems() {
+  if (!clearCacheBtn || !clearCacheBtn.parentNode) return;
+  if (document.getElementById("exportBackupBtn")) return;
+
+  const exportItem = document.createElement("div");
+  exportItem.className = "settings-item action-item";
+  exportItem.id = "exportBackupBtn";
+  exportItem.innerHTML = `
+    <div class="item-label">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+        <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
+      </svg>
+      <span id="exportBackupLabel">${getBackupText("exportLabel")}</span>
+    </div>
+    <div class="item-action">
+      <span class="action-label" id="exportBackupAction">${getBackupText("exportBtn")}</span>
+    </div>
+  `;
+
+  const importItem = document.createElement("div");
+  importItem.className = "settings-item action-item";
+  importItem.id = "importBackupBtn";
+  importItem.innerHTML = `
+    <div class="item-label">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor">
+        <path d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z"/>
+      </svg>
+      <span id="importBackupLabel">${getBackupText("importLabel")}</span>
+    </div>
+    <div class="item-action">
+      <span class="action-label" id="importBackupAction">${getBackupText("importBtn")}</span>
+    </div>
+  `;
+
+  const fileInput = document.createElement("input");
+  fileInput.type = "file";
+  fileInput.accept = ".json,application/json";
+  fileInput.style.display = "none";
+  fileInput.id = "moriBackupFileInput";
+
+  clearCacheBtn.parentNode.insertBefore(exportItem, clearCacheBtn);
+  clearCacheBtn.parentNode.insertBefore(importItem, clearCacheBtn);
+  document.body.appendChild(fileInput);
+
+  exportItem.addEventListener("click", () => {
+    exportMoriBackup();
+  });
+
+  importItem.addEventListener("click", () => {
+    fileInput.value = "";
+    fileInput.click();
+  });
+
+  fileInput.addEventListener("change", (e) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      importMoriBackupFromFile(file);
+    }
+  });
+
+  window.addEventListener("mori_language_changed", () => {
+    const expLbl = document.getElementById("exportBackupLabel");
+    const expAct = document.getElementById("exportBackupAction");
+    const impLbl = document.getElementById("importBackupLabel");
+    const impAct = document.getElementById("importBackupAction");
+    if (expLbl) expLbl.textContent = getBackupText("exportLabel");
+    if (expAct) expAct.textContent = getBackupText("exportBtn");
+    if (impLbl) impLbl.textContent = getBackupText("importLabel");
+    if (impAct) impAct.textContent = getBackupText("importBtn");
+  });
 }
 
 /**
@@ -630,4 +1060,7 @@ export function initStorageSettings() {
       },
     );
   });
+
+  // 8. JSON Backup & Restore
+  mountBackupRestoreItems();
 }
