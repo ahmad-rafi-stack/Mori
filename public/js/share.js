@@ -26,7 +26,11 @@ import { cleanUrl } from "./utils/urlUtils.js";
 import { getUserAgent } from "./utils/index.js";
 import { translations, getInitialLanguage, t } from "./i18n/index.js";
 import { safeSetHistory } from "./modules/history.js";
-import { generateFileName, sanitizeTitle } from "./downloader/filename.js";
+import {
+  generateFileName,
+  sanitizeTitle,
+  resolveExtension,
+} from "./downloader/filename.js";
 
 let currentLang = getInitialLanguage();
 let lang = translations[currentLang] || translations.en;
@@ -432,7 +436,13 @@ async function triggerDownload(dlItem, title, idx) {
     if (badge) badge.textContent = lang["label-saving"] || "SAVING...";
   }
 
-  const filename = generateFilename(title, dlItem.type, idx, dlItem.url || "");
+  const filename = generateFilename(
+    title,
+    dlItem.type,
+    idx,
+    activeResult?.author || "",
+    dlItem.url || "",
+  );
   const folder = getFolderForPlatform(currentPlatform);
 
   let finalUrl = dlItem.url;
@@ -801,7 +811,7 @@ function getFolderForPlatform(platform) {
   return autoFolder && sub ? `${base}/${sub}` : base;
 }
 
-function generateFilename(title, type, index, url = "") {
+function generateFilename(title, type, index, author = "", url = "") {
   const cleanTypeLabel = (type || "")
     .replace(/\s*\[(MP3|MP4|JPG|PNG|WEBP|Cover|Audio|Video)\]/gi, "")
     .trim();
@@ -821,30 +831,9 @@ function generateFilename(title, type, index, url = "") {
     effectiveTitle = `${effectiveTitle}_${Number(index) + 1}`;
   }
 
-  const sanitized = sanitizeTitle(effectiveTitle, type);
-
-  let ext = "mp4";
-  const t = (type || "").toLowerCase();
-  const u = (url || "").toLowerCase();
-  const fmtMatch = u.match(/[?&]format=(jpg|jpeg|png|webp)\b/i);
-  if (t.includes("mp3") || t.includes("audio") || /\.mp3(\?|$)/i.test(u))
-    ext = "mp3";
-  else if (t.includes("m4a") || /\.m4a(\?|$)/i.test(u)) ext = "m4a";
-  else if (t.includes("png") || /\.png(\?|$)/i.test(u) || fmtMatch?.[1] === "png")
-    ext = "png";
-  else if (t.includes("webp") || /\.webp(\?|$)/i.test(u) || fmtMatch?.[1] === "webp")
-    ext = "webp";
-  else if (
-    t.includes("jpg") ||
-    t.includes("jpeg") ||
-    t.includes("image") ||
-    t.includes("photo") ||
-    t.includes("cover") ||
-    /\.jpe?g(\?|$)/i.test(u) ||
-    fmtMatch?.[1] === "jpg" ||
-    fmtMatch?.[1] === "jpeg"
-  )
-    ext = "jpg";
+  const sanitized = sanitizeTitle(effectiveTitle, type, author);
+  const effectiveType = /cover/i.test(type || "") ? `${type} image` : type;
+  const ext = resolveExtension(effectiveType, url);
 
   return generateFileName(
     sanitized,
@@ -852,6 +841,7 @@ function generateFilename(title, type, index, url = "") {
     window.__MORI_SHARE_URL || currentPlatform,
     url || null,
     type,
+    author,
   );
 }
 
@@ -878,6 +868,7 @@ function saveHistory(result, url) {
 
     const newItem = {
       title: cleanTitle,
+      author: result.author || (existing ? existing.author || "" : ""),
       thumbnail: thumb,
       url: url,
       sourceUrl: result.sourceUrl || url,

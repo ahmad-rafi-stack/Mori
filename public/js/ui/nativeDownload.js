@@ -80,6 +80,8 @@ export async function startNativeDownload(
     return { success: true, skipped: true };
   }
 
+  const author = typeof meta === "string" ? meta : meta?.author || "";
+
   if (!Filesystem) {
     try {
       if (!url.startsWith("blob:") && !url.startsWith("data:")) {
@@ -88,13 +90,14 @@ export async function startNativeDownload(
           const blobData = await blobRes.blob();
           const blobUrl = URL.createObjectURL(blobData);
           const ext = resolveExtension(type, url);
-          const sanitizedTitle = sanitizeTitle(title, type);
+          const sanitizedTitle = sanitizeTitle(title, type, author);
           const fileName = generateFileName(
             sanitizedTitle,
             ext,
             sourceUrl,
             url,
             type,
+            author,
           );
           const a = document.createElement("a");
           a.href = blobUrl;
@@ -155,7 +158,13 @@ export async function startNativeDownload(
     if (src.includes("tiktok")) return "TikTok";
     if (src.includes("instagram")) return "Instagram";
     if (src.includes("youtube")) return "YouTube";
-    if (src.includes("twitter") || /(?:^|[/.])x\.com(?:[/?#:]|$)/i.test(src))
+    if (
+      src.includes("twitter") ||
+      /(?:^|[/.])x\.com(?:[/?#:]|$)/i.test(src) ||
+      src.includes("fxtwitter.com") ||
+      src.includes("vxtwitter.com") ||
+      src.includes("fixupx.com")
+    )
       return "Twitter";
     if (src.includes("facebook")) return "Facebook";
     if (src.includes("pinterest")) return "Pinterest";
@@ -348,13 +357,14 @@ export async function startNativeDownload(
         cleanTypeLabel.replace(/^\d+\.\s+/, "").trim() || cleanTypeLabel;
     }
 
-    const sanitizedTitle = sanitizeTitle(title, type);
+    const sanitizedTitle = sanitizeTitle(title, type, author);
     let fileName = generateFileName(
       sanitizedTitle,
       ext,
       sourceUrl,
       url,
       type,
+      author,
     );
 
     const isAudio = /mp3|audio|128k|48k|m4a|wav|flac/i.test(type);

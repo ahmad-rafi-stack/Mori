@@ -86,7 +86,7 @@ export default {
   "filename-platform_quality_number": "المنصة + الجودة + الرقم",
   "filename-platform_date_time_quality_number": "المنصة + التاريخ + الوقت + الجودة + الرقم",
   "filename-custom": "قالب مخصص",
-  "filename-custom-hint": "العناصر: {platform}, {date}, {time}, {quality}, {num}, {title}",
+  "filename-custom-hint": "العناصر: {platform}, {date}, {time}, {quality}, {num}, {title}, {author}",
   "font-default": "Inter",
   "font-display": "Display Bold",
   "font-jakarta": "Plus Jakarta Sans",

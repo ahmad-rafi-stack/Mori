@@ -86,7 +86,7 @@ export default {
   "filename-platform_quality_number": "प्लेटफ़ॉर्म + गुणवत्ता + संख्या",
   "filename-platform_date_time_quality_number": "प्लेटफ़ॉर्म + दिनांक + समय + गुणवत्ता + संख्या",
   "filename-custom": "कस्टम टेम्पलेट",
-  "filename-custom-hint": "टोकन: {platform}, {date}, {time}, {quality}, {num}, {title}",
+  "filename-custom-hint": "टोकन: {platform}, {date}, {time}, {quality}, {num}, {title}, {author}",
   "font-default": "Inter",
   "font-display": "Display Bold",
   "font-jakarta": "Plus Jakarta Sans",

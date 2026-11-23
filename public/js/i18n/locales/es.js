@@ -88,7 +88,7 @@ export default {
   "filename-platform_quality_number": "Plataforma + calidad + número",
   "filename-platform_date_time_quality_number": "Plataforma + fecha + hora + calidad + número",
   "filename-custom": "Plantilla personalizada",
-  "filename-custom-hint": "Variables: {platform}, {date}, {time}, {quality}, {num}, {title}",
+  "filename-custom-hint": "Variables: {platform}, {date}, {time}, {quality}, {num}, {title}, {author}",
   "font-default": "Inter",
   "font-display": "Display Bold",
   "font-jakarta": "Plus Jakarta Sans",

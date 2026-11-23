@@ -5,20 +5,33 @@ export function resolveExtension(type, url) {
   const isAudio = /mp3|audio|128k|48k|m4a|wav|flac/i.test(type);
   const isImage =
     /image|photo|jpg|jpeg|png|webp/i.test(type) ||
-    /\.(jpg|jpeg|png|webp)/i.test(url);
+    /\.(jpg|jpeg|png|webp)/i.test(url) ||
+    /[?&]format=(jpg|jpeg|png|webp)\b/i.test(url);
   let ext = isAudio ? "mp3" : isImage ? "jpg" : "mp4";
   const typeStr = (type || "").toLowerCase();
   const urlLower = (url || "").toLowerCase();
+  const formatParam = urlLower.match(/[?&]format=(jpg|jpeg|png|webp)\b/i);
 
-  if (/\.png(\?|$)/i.test(urlLower) || typeStr.includes("png")) ext = "png";
-  else if (/\.webp(\?|$)/i.test(urlLower) || typeStr.includes("webp"))
+  if (
+    /\.png(\?|$)/i.test(urlLower) ||
+    typeStr.includes("png") ||
+    formatParam?.[1] === "png"
+  )
+    ext = "png";
+  else if (
+    /\.webp(\?|$)/i.test(urlLower) ||
+    typeStr.includes("webp") ||
+    formatParam?.[1] === "webp"
+  )
     ext = "webp";
   else if (/\.m4a(\?|$)/i.test(urlLower) || typeStr.includes("m4a")) ext = "m4a";
   else if (/\.mp3(\?|$)/i.test(urlLower) || typeStr.includes("mp3")) ext = "mp3";
   else if (
     /\.jpe?g(\?|$)/i.test(urlLower) ||
     typeStr.includes("jpg") ||
-    typeStr.includes("jpeg")
+    typeStr.includes("jpeg") ||
+    formatParam?.[1] === "jpg" ||
+    formatParam?.[1] === "jpeg"
   )
     ext = "jpg";
   else if (
@@ -44,7 +57,36 @@ export function resolveExtension(type, url) {
   return ext.toLowerCase();
 }
 
-export function sanitizeTitle(title, type) {
+const GENERIC_AUTHOR_PLACEHOLDERS = new Set([
+  "unknown",
+  "tiktok user",
+  "douyin user",
+  "rednote creator",
+  "bilibili creator",
+  "facebook media",
+  "creator",
+  "user",
+]);
+
+export function sanitizeAuthor(author = "") {
+  const rawAuthor = String(author || "").trim();
+  if (!rawAuthor) return "";
+  let cleanAuthor = rawAuthor
+    .replace(/[\\/:*?"<>|#%&{}\[\]$^+=~`';,!]/g, "")
+    .replace(/[^\w\s\-().@\u4e00-\u9fa5\u3040-\u30ff\uac00-\ud7af]/gi, "")
+    .trim();
+
+  const authorLower = cleanAuthor.replace(/^@+/, "").toLowerCase();
+  if (!cleanAuthor || !authorLower || GENERIC_AUTHOR_PLACEHOLDERS.has(authorLower)) {
+    return "";
+  }
+  if (!cleanAuthor.startsWith("@")) {
+    cleanAuthor = `@${cleanAuthor}`;
+  }
+  return cleanAuthor;
+}
+
+export function sanitizeTitle(title, type, author = "") {
   const cleanTypeLabel = (type || "")
     .replace(/\s*\[(MP3|MP4|JPG|PNG|WEBP)\]/gi, "")
     .trim();
@@ -56,12 +98,39 @@ export function sanitizeTitle(title, type) {
       cleanTypeLabel.replace(/^\d+\.\s+/, "").trim() || cleanTypeLabel;
   }
 
+  // Preserve multi-photo slide index suffix (_1, _2, ...) before hashtag cleanup & truncation
+  const slideSuffixMatch = effectiveTitle.match(/(_\d+)$/);
+  const slideSuffix = slideSuffixMatch ? slideSuffixMatch[1] : "";
+  if (slideSuffix) {
+    effectiveTitle = effectiveTitle.slice(0, -slideSuffix.length);
+  }
+
+  // Strip hashtags from caption
+  effectiveTitle = effectiveTitle.replace(/#[^\s#]+/g, "");
+
   let sanitized = effectiveTitle
-    .replace(/[\\/:*?"<>|#%&{}[\]@$^+=~`';,]/g, "")
-    .replace(/[^\w\s\-.\u4e00-\u9fa5\u3040-\u30ff\uac00-\ud7af]/gi, "")
+    .replace(/[\\/:*?"<>|#%&{}\[\]$^+=~`';,!]/g, "")
+    .replace(/[^\w\s\-().@\u4e00-\u9fa5\u3040-\u30ff\uac00-\ud7af]/gi, "")
     .trim()
-    .replace(/\s+/g, " ")
-    .substring(0, 60);
+    .replace(/\s+/g, " ");
+
+  const cleanAuthor = sanitizeAuthor(author);
+
+  if (cleanAuthor) {
+    const maxLen = slideSuffix ? 50 : 55;
+    const trimmedCaption = sanitized.substring(0, maxLen).trim();
+    if (!trimmedCaption.toLowerCase().includes(`(${cleanAuthor.toLowerCase()})`)) {
+      sanitized = trimmedCaption
+        ? `${trimmedCaption}${slideSuffix} (${cleanAuthor})`
+        : `${cleanAuthor}${slideSuffix}`;
+    } else {
+      sanitized = `${trimmedCaption}${slideSuffix}`;
+    }
+  } else {
+    const maxLen = slideSuffix ? 50 : 60;
+    const trimmedCaption = sanitized.substring(0, maxLen).trim();
+    sanitized = `${trimmedCaption}${slideSuffix}`;
+  }
 
   return sanitized || "Mori_Media";
 }
@@ -80,7 +149,10 @@ export function detectPlatform(sourceUrl, url) {
   if (
     src.includes("twitter") ||
     /(?:^|[/.])x\.com(?:[/?#:]|$)/i.test(src) ||
-    /(?:^|[/.])t\.co(?:[/?#:]|$)/i.test(src)
+    /(?:^|[/.])t\.co(?:[/?#:]|$)/i.test(src) ||
+    src.includes("fxtwitter.com") ||
+    src.includes("vxtwitter.com") ||
+    src.includes("fixupx.com")
   )
     return "Twitter";
   if (
@@ -144,10 +216,19 @@ export function extractQuality(type, url) {
 export function getNextPlatformCounter(platform) {
   const p = (platform || "media").toLowerCase();
   const key = `mori_counter_${p}`;
-  let count = parseInt(localStorage.getItem(key) || "0", 10);
+  let count = 0;
+  try {
+    if (typeof localStorage !== "undefined") {
+      count = parseInt(localStorage.getItem(key) || "0", 10);
+    }
+  } catch (_) {}
   if (isNaN(count) || count < 0) count = 0;
   count += 1;
-  localStorage.setItem(key, String(count));
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(key, String(count));
+    }
+  } catch (_) {}
   return String(count).padStart(3, "0");
 }
 
@@ -162,15 +243,28 @@ export const FILENAME_PRESETS = {
   platform_date_time_quality_number: "{platform}_{date}_{time}_{quality}_{num}",
 };
 
-export function generateFileName(sanitizedTitle, ext, sourceUrl, url, type) {
-  let templateSetting = localStorage.getItem("mori_filename") || "title";
+export function generateFileName(
+  sanitizedTitle,
+  ext,
+  sourceUrl,
+  url,
+  type,
+  author = "",
+) {
+  let templateSetting = "title";
+  let customTemplate = "";
+  try {
+    if (typeof localStorage !== "undefined") {
+      templateSetting = localStorage.getItem("mori_filename") || "title";
+      customTemplate = localStorage.getItem("mori_filename_custom") || "";
+    }
+  } catch (_) {}
+
   let template = FILENAME_PRESETS[templateSetting];
 
   if (!template) {
     if (templateSetting === "custom") {
-      template =
-        localStorage.getItem("mori_filename_custom") ||
-        "{platform}_{date}_{num}";
+      template = customTemplate || "{platform}_{date}_{num}";
     } else if (templateSetting.includes("{") && templateSetting.includes("}")) {
       template = templateSetting;
     } else {
@@ -185,6 +279,20 @@ export function generateFileName(sanitizedTitle, ext, sourceUrl, url, type) {
     ? sanitizedTitle.slice(0, -(cleanExt.length + 1))
     : sanitizedTitle || "Mori_Media";
 
+  const cleanAuthor = sanitizeAuthor(author);
+  const hasAuthorToken = template.includes("{author}");
+
+  // When template explicitly uses {author}, strip trailing " (@handle)" from {title}
+  // to prevent duplicate author tags like "@UserOne_Caption (@UserOne).mp4"
+  let titleForToken = cleanTitle;
+  if (hasAuthorToken && cleanAuthor) {
+    const escapedAuthor = cleanAuthor.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    titleForToken = titleForToken
+      .replace(new RegExp(`\\s*\\(${escapedAuthor}\\)$`, "i"), "")
+      .trim();
+    if (!titleForToken) titleForToken = "Mori_Media";
+  }
+
   const platform = detectPlatform(sourceUrl, url);
   const now = new Date();
   const pad2 = (n) => String(n).padStart(2, "0");
@@ -198,13 +306,21 @@ export function generateFileName(sanitizedTitle, ext, sourceUrl, url, type) {
   }
 
   let baseName = template
-    .replace(/\{title\}/g, cleanTitle)
+    .replace(/\{title\}/g, titleForToken)
+    .replace(/\{author\}/g, cleanAuthor)
     .replace(/\{platform\}/g, platform)
     .replace(/\{date\}/g, dateStr)
     .replace(/\{time\}/g, timeStr)
     .replace(/\{quality\}/g, quality)
     .replace(/\{num\}/g, numStr)
     .replace(/\{timestamp\}/g, String(Date.now()));
+
+  if (hasAuthorToken && !cleanAuthor) {
+    baseName = baseName
+      .replace(/_{2,}/g, "_")
+      .replace(/\s*-\s*-\s*/g, "-")
+      .replace(/^[_-\s]+|[_-\s]+$/g, "");
+  }
 
   baseName = baseName
     .replace(/[\\/:*?"<>|]/g, "")

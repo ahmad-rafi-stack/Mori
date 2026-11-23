@@ -1,6 +1,7 @@
 // download.js — main download flow (analyze + batch download)
 import { translations, t } from "../i18n/index.js";
 import { convertImagesToPdf } from "../utils/pdfHelper.js";
+import { sanitizeTitle } from "../downloader/filename.js";
 import {
   Filesystem,
   showToast,
@@ -304,6 +305,7 @@ downloadBtn.addEventListener("click", async () => {
             const itemTitle = decodeHtmlEntities(
               item.data.result?.title || "Media",
             );
+            const itemAuthor = item.data.result?.author || "";
 
             if (downloadsList.length > 0) {
               const batchFormat =
@@ -361,6 +363,7 @@ downloadBtn.addEventListener("click", async () => {
                     null,
                     item.url,
                     false,
+                    { headers: audioItem.headers, author: itemAuthor },
                   );
                 }
               } else if (isResolutionTiers) {
@@ -388,6 +391,7 @@ downloadBtn.addEventListener("click", async () => {
                   null,
                   item.url,
                   false,
+                  { headers: targetMedia.headers, author: itemAuthor },
                 );
               } else {
                 // Carousel / Multi-item post: download video items + photo items
@@ -412,6 +416,7 @@ downloadBtn.addEventListener("click", async () => {
                       null,
                       item.url,
                       false,
+                      { headers: vObj.headers, author: itemAuthor },
                     );
                   }
                 }
@@ -433,6 +438,7 @@ downloadBtn.addEventListener("click", async () => {
                       null,
                       item.url,
                       false,
+                      { headers: dlObj.headers, author: itemAuthor },
                     );
                   } else if (batchPhotoMode === "pdf") {
                     if (photoItems.length > 1) {
@@ -448,11 +454,11 @@ downloadBtn.addEventListener("click", async () => {
                           return;
                         }
 
-                        const sanitizedTitle =
-                          itemTitle
-                            .replace(/[\\/:*?"<>|#%&{}\[\]@$^+=~`';,]/g, "")
-                            .trim()
-                            .substring(0, 60) || "Mori_Batch_Album";
+                        const sanitizedTitle = sanitizeTitle(
+                          itemTitle || "Mori_Batch_Album",
+                          "PDF",
+                          itemAuthor || "",
+                        );
                         const pdfFileName = `${sanitizedTitle}.pdf`;
                         let savedPdfPath = `Download/Mori/${pdfFileName}`;
                         let pdfDir = "EXTERNAL_STORAGE";
@@ -545,6 +551,7 @@ downloadBtn.addEventListener("click", async () => {
                             null,
                             item.url,
                             false,
+                            { headers: dlObj.headers, author: itemAuthor },
                           );
                         }
                       }
@@ -564,6 +571,7 @@ downloadBtn.addEventListener("click", async () => {
                         null,
                         item.url,
                         false,
+                        { headers: dlObj.headers, author: itemAuthor },
                       );
                     }
                   } else {
@@ -588,6 +596,7 @@ downloadBtn.addEventListener("click", async () => {
                         null,
                         item.url,
                         false,
+                        { headers: dlObj.headers, author: itemAuthor },
                       );
                     }
                   }

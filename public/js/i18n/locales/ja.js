@@ -96,7 +96,7 @@
   "filename-platform_quality_number": "プラットフォーム + 画質 + 番号",
   "filename-platform_date_time_quality_number": "プラットフォーム + 日付 + 時間 + 画質 + 番号",
   "filename-custom": "カスタムテンプレート",
-  "filename-custom-hint": "トークン: {platform}, {date}, {time}, {quality}, {num}, {title}",
+  "filename-custom-hint": "トークン: {platform}, {date}, {time}, {quality}, {num}, {title}, {author}",
   "font-default": "Inter",
   "font-display": "ディスプレイ Bold",
   "font-jakarta": "Plus Jakarta Sans",

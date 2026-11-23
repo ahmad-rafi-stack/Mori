@@ -88,7 +88,7 @@ export default {
   "filename-platform_quality_number": "平台 + 画质 + 编号",
   "filename-platform_date_time_quality_number": "平台 + 日期 + 时间 + 画质 + 编号",
   "filename-custom": "自定义模板",
-  "filename-custom-hint": "标签: {platform}, {date}, {time}, {quality}, {num}, {title}",
+  "filename-custom-hint": "标签: {platform}, {date}, {time}, {quality}, {num}, {title}, {author}",
   "font-default": "Inter",
   "font-display": "Display Bold",
   "font-jakarta": "Plus Jakarta Sans",

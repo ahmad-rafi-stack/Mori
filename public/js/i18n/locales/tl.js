@@ -86,7 +86,7 @@ export default {
   "filename-platform_quality_number": "Platform + Kalidad + Numero",
   "filename-platform_date_time_quality_number": "Platform + Petsa + Oras + Kalidad + Numero",
   "filename-custom": "Custom Template",
-  "filename-custom-hint": "Mga Token: {platform}, {date}, {time}, {quality}, {num}, {title}",
+  "filename-custom-hint": "Mga Token: {platform}, {date}, {time}, {quality}, {num}, {title}, {author}",
   "font-default": "Inter",
   "font-display": "Display Bold",
   "font-jakarta": "Plus Jakarta Sans",

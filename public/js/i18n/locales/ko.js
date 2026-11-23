@@ -86,7 +86,7 @@ export default {
   "filename-platform_quality_number": "플랫폼 + 화질 + 번호",
   "filename-platform_date_time_quality_number": "플랫폼 + 날짜 + 시간 + 화질 + 번호",
   "filename-custom": "커스텀 템플릿",
-  "filename-custom-hint": "토큰: {platform}, {date}, {time}, {quality}, {num}, {title}",
+  "filename-custom-hint": "토큰: {platform}, {date}, {time}, {quality}, {num}, {title}, {author}",
   "font-default": "Inter",
   "font-display": "디스플레이 Bold",
   "font-jakarta": "Plus Jakarta Sans",

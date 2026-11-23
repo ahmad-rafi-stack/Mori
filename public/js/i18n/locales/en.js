@@ -88,7 +88,7 @@ export default {
   "filename-platform_quality_number": "Platform + Quality + Number",
   "filename-platform_date_time_quality_number": "Platform + Date + Time + Quality + Number",
   "filename-custom": "Custom Template",
-  "filename-custom-hint": "Tokens: {platform}, {date}, {time}, {quality}, {num}, {title}",
+  "filename-custom-hint": "Tokens: {platform}, {date}, {time}, {quality}, {num}, {title}, {author}",
   "font-default": "Inter",
   "font-display": "Display Bold",
   "font-jakarta": "Plus Jakarta Sans",

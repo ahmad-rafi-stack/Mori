@@ -24,6 +24,7 @@ import { startNativeDownload } from "./nativeDownload.js";
 import { downloadBubble } from "./downloadBubble.js";
 import { escapeHtml } from "../ui.js";
 import { ensurePdfLib } from "../utils/pdfHelper.js";
+import { sanitizeTitle } from "../downloader/filename.js";
 
 export function renderMediaSlides(container, items, resultThumbnail) {
   if (!container) return;
@@ -981,7 +982,7 @@ export function renderResult(result, originalUrl) {
                     targetBtn,
                     result.sourceUrl || originalUrl,
                     false, // don't reset cancel flag between tracks
-                    { headers: item.headers },
+                    { headers: item.headers, author: result.author || "" },
                   );
                 } catch (err) {
                   console.error("Download track error:", err);
@@ -1151,6 +1152,7 @@ export function renderResult(result, originalUrl) {
           imageItems,
           result.sourceUrl || originalUrl,
           result.thumbnail,
+          result.author || "",
         );
       downloadList.appendChild(pdfBtn);
     }
@@ -1187,7 +1189,7 @@ export function renderResult(result, originalUrl) {
           e.currentTarget,
           result.sourceUrl || originalUrl,
           true,
-          { headers: dl.headers },
+          { headers: dl.headers, author: result.author || "" },
         );
         if (res && res.success && failedIndices.includes(index)) {
           failedIndices = failedIndices.filter((idx) => idx !== index);
@@ -1229,6 +1231,7 @@ export async function exportGalleryToPdf(
   items,
   sourceUrl = null,
   thumbnail = null,
+  author = "",
 ) {
   const pdfDlId = `pdf_${Date.now()}`;
   let pdfCancelled = false;
@@ -1423,7 +1426,8 @@ export async function exportGalleryToPdf(
 
     const pdfBytes = await pdfDoc.save();
 
-    const fileName = `${(title || "Gallery").replace(/[^\w\s]/gi, "").trim()}_${Date.now()}.pdf`;
+    const cleanPdfTitle = sanitizeTitle(title || "Gallery", "PDF", author);
+    const fileName = `${cleanPdfTitle}.pdf`;
 
     // Dynamic folder structure for PDF exports
     let pdfSubfolder = (
