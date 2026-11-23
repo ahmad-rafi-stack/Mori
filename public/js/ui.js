@@ -8,6 +8,10 @@ import {
   setCurrentSlideIndex,
   setSlideData,
 } from "./modules/core.js";
+import {
+  getHistoryFilterText,
+  filterHistoryItems,
+} from "./ui/historyFilter.js";
 
 // Escape HTML to prevent XSS from scraped titles
 export function escapeHtml(str) {
@@ -235,7 +239,181 @@ function createHistoryCard(
   return card;
 }
 
+let activeHistoryFilter = { tab: "all", query: "" };
+let lastHistoryCallbacks = null;
+let historySearchDebounceTimer = null;
+let historyFilterLangBound = false;
+
+function updateHistoryFilterBarLabels(bar) {
+  if (!bar) return;
+  const searchInput = bar.querySelector("#moriHistorySearchInput");
+  if (searchInput) {
+    searchInput.placeholder = getHistoryFilterText(
+      "searchPlaceholder",
+      currentLang,
+    );
+  }
+  bar.querySelectorAll(".mori-history-chip").forEach((chip) => {
+    const tab = chip.getAttribute("data-tab");
+    if (tab) chip.textContent = getHistoryFilterText(tab, currentLang);
+  });
+  const emptyEl = document.querySelector(
+    "#historyPage .mori-history-filter-empty",
+  );
+  if (emptyEl) {
+    emptyEl.textContent = getHistoryFilterText("emptyMatch", currentLang);
+  }
+}
+
+function resetHistoryFilterState(bar) {
+  activeHistoryFilter.tab = "all";
+  activeHistoryFilter.query = "";
+  if (!bar) return;
+  const searchInput = bar.querySelector("#moriHistorySearchInput");
+  if (searchInput) searchInput.value = "";
+  bar.querySelectorAll(".mori-history-chip").forEach((chip) => {
+    chip.classList.toggle("active", chip.getAttribute("data-tab") === "all");
+  });
+}
+
+function ensureHistoryFilterBar(historyPage) {
+  if (!historyPage || typeof document === "undefined") return null;
+
+  if (!document.getElementById("mori-history-filter-style")) {
+    const st = document.createElement("style");
+    st.id = "mori-history-filter-style";
+    st.textContent = `
+      .mori-history-filter-bar {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        margin: 8px 0 12px 0;
+      }
+      .mori-history-search-wrap {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 11px;
+        border-radius: 10px;
+        background: rgba(128, 128, 128, 0.08);
+        border: 1px solid rgba(128, 128, 128, 0.16);
+      }
+      .mori-history-search-wrap input {
+        flex: 1;
+        border: none;
+        background: transparent;
+        color: inherit;
+        font-size: 13px;
+        outline: none;
+      }
+      .mori-history-chips {
+        display: flex;
+        gap: 6px;
+        overflow-x: auto;
+        padding-bottom: 2px;
+        scrollbar-width: none;
+      }
+      .mori-history-chips::-webkit-scrollbar {
+        display: none;
+      }
+      .mori-history-chip {
+        border: 1px solid rgba(128, 128, 128, 0.22);
+        background: transparent;
+        color: inherit;
+        font-size: 11px;
+        font-weight: 600;
+        padding: 4px 10px;
+        border-radius: 999px;
+        cursor: pointer;
+        white-space: nowrap;
+        opacity: 0.72;
+        transition: all 0.15s ease;
+      }
+      .mori-history-chip.active {
+        opacity: 1;
+        background: var(--primary, #fff);
+        color: var(--on-primary, #000);
+        border-color: var(--primary, #fff);
+      }
+    `;
+    document.head.appendChild(st);
+  }
+
+  let bar = document.getElementById("moriHistoryFilterBar");
+  if (bar) return bar;
+
+  bar = document.createElement("div");
+  bar.id = "moriHistoryFilterBar";
+  bar.className = "mori-history-filter-bar";
+  bar.style.display = "none";
+  bar.innerHTML = `
+    <div class="mori-history-search-wrap">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" style="opacity:0.6;flex-shrink:0;">
+        <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
+      </svg>
+      <input type="text" id="moriHistorySearchInput" placeholder="${escapeHtml(getHistoryFilterText("searchPlaceholder", currentLang))}" autocomplete="off" spellcheck="false" />
+    </div>
+    <div class="mori-history-chips">
+      <button type="button" class="mori-history-chip active" data-tab="all">${escapeHtml(getHistoryFilterText("all", currentLang))}</button>
+      <button type="button" class="mori-history-chip" data-tab="fav">${escapeHtml(getHistoryFilterText("fav", currentLang))}</button>
+      <button type="button" class="mori-history-chip" data-tab="video">${escapeHtml(getHistoryFilterText("video", currentLang))}</button>
+      <button type="button" class="mori-history-chip" data-tab="doc">${escapeHtml(getHistoryFilterText("doc", currentLang))}</button>
+      <button type="button" class="mori-history-chip" data-tab="audio">${escapeHtml(getHistoryFilterText("audio", currentLang))}</button>
+    </div>
+  `;
+
+  const anchor =
+    historyPage.querySelector(".history-list") ||
+    historyPage.querySelector(".empty-state");
+  if (anchor) {
+    historyPage.insertBefore(bar, anchor);
+  } else {
+    historyPage.appendChild(bar);
+  }
+
+  const triggerFilteredRender = () => {
+    if (lastHistoryCallbacks) {
+      renderHistory(
+        lastHistoryCallbacks.onItemClick,
+        lastHistoryCallbacks.onDeleteClick,
+      );
+    }
+  };
+
+  const searchInput = bar.querySelector("#moriHistorySearchInput");
+  searchInput?.addEventListener("input", (e) => {
+    activeHistoryFilter.query = e.target.value || "";
+    clearTimeout(historySearchDebounceTimer);
+    historySearchDebounceTimer = setTimeout(() => {
+      triggerFilteredRender();
+    }, 150);
+  });
+
+  bar.querySelectorAll(".mori-history-chip").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      bar
+        .querySelectorAll(".mori-history-chip")
+        .forEach((c) => c.classList.remove("active"));
+      chip.classList.add("active");
+      activeHistoryFilter.tab = chip.getAttribute("data-tab") || "all";
+      triggerFilteredRender();
+    });
+  });
+
+  if (!historyFilterLangBound) {
+    historyFilterLangBound = true;
+    window.addEventListener("mori_language_changed", () => {
+      updateHistoryFilterBarLabels(
+        document.getElementById("moriHistoryFilterBar"),
+      );
+    });
+  }
+
+  return bar;
+}
+
 export function renderHistory(onItemClick, onDeleteClick) {
+  lastHistoryCallbacks = { onItemClick, onDeleteClick };
   if (typeof window.checkAndMergePendingHistorySync === "function") {
     window.checkAndMergePendingHistorySync();
   }
@@ -273,6 +451,7 @@ export function renderHistory(onItemClick, onDeleteClick) {
     historyStatsEl.textContent = history.length.toLocaleString();
   }
 
+  const filterBar = ensureHistoryFilterBar(historyPage);
   const emptyState = historyPage.querySelector(".empty-state");
   let list = historyPage.querySelector(".history-list");
   if (list) list.remove();
@@ -283,11 +462,18 @@ export function renderHistory(onItemClick, onDeleteClick) {
   }
 
   if (history.length === 0) {
+    resetHistoryFilterState(filterBar);
+    if (filterBar) filterBar.style.display = "none";
     setIsEditingHistory(false);
     emptyState?.classList.remove("hidden");
     editHistoryBtn?.classList.add("hidden");
     historyActions?.classList.add("hidden");
     return;
+  }
+
+  if (filterBar) {
+    filterBar.style.display = "flex";
+    updateHistoryFilterBarLabels(filterBar);
   }
 
   emptyState?.classList.add("hidden");
@@ -299,18 +485,32 @@ export function renderHistory(onItemClick, onDeleteClick) {
     historyActions?.classList.add("hidden");
   }
 
+  // Filter full sorted history dataset BEFORE pagination so search & chips work across all pages
+  const filteredHistory = filterHistoryItems(history, activeHistoryFilter);
+
   list = document.createElement("div");
   list.className = "history-list";
+
+  if (filteredHistory.length === 0) {
+    const emptyEl = document.createElement("div");
+    emptyEl.className = "mori-history-filter-empty";
+    emptyEl.style.cssText =
+      "text-align:center;padding:18px 10px;font-size:12px;opacity:0.65;";
+    emptyEl.textContent = getHistoryFilterText("emptyMatch", currentLang);
+    list.appendChild(emptyEl);
+    historyPage.appendChild(list);
+    return;
+  }
 
   let renderedIndex = 0;
   let sentinel = null;
 
   const renderBatch = () => {
-    const end = Math.min(renderedIndex + BATCH_SIZE, history.length);
+    const end = Math.min(renderedIndex + BATCH_SIZE, filteredHistory.length);
     for (let i = renderedIndex; i < end; i++) {
       list.appendChild(
         createHistoryCard(
-          history[i],
+          filteredHistory[i],
           activeUrl,
           isEditingHistory,
           onItemClick,
@@ -320,7 +520,7 @@ export function renderHistory(onItemClick, onDeleteClick) {
     }
     renderedIndex = end;
 
-    if (renderedIndex < history.length) {
+    if (renderedIndex < filteredHistory.length) {
       if (!sentinel) {
         sentinel = document.createElement("div");
         sentinel.className = "history-sentinel";
