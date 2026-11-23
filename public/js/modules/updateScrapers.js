@@ -13,18 +13,20 @@ export const PATCHED_SCRAPER_BIN_KEY = "mori_patched_scraper_bin";
 export const LAST_SCRAPER_CHECK_KEY = "mori_last_scraper_check";
 
 export function getActiveScraperVersion() {
+  const bundledVer =
+    typeof BUNDLED_SCRAPER_VERSION === "number"
+      ? BUNDLED_SCRAPER_VERSION
+      : typeof window.__MORI_BUNDLED_SCRAPER_VERSION__ === "number"
+        ? window.__MORI_BUNDLED_SCRAPER_VERSION__
+        : 2;
   const localVer = parseInt(
     localStorage.getItem(ACTIVE_SCRAPER_VERSION_KEY),
     10,
   );
-  if (!isNaN(localVer) && localVer > 0) return localVer;
-  if (typeof BUNDLED_SCRAPER_VERSION === "number") {
-    return BUNDLED_SCRAPER_VERSION;
+  if (!isNaN(localVer) && localVer > 0) {
+    return Math.max(localVer, bundledVer);
   }
-  if (typeof window.__MORI_BUNDLED_SCRAPER_VERSION__ === "number") {
-    return window.__MORI_BUNDLED_SCRAPER_VERSION__;
-  }
-  return 2;
+  return bundledVer;
 }
 
 async function fetchRemoteJson(url) {

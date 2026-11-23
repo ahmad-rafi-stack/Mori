@@ -145,7 +145,7 @@ function buildFxTwitterPayload(tweet, originalUrl, tweetId) {
           const label = resMatch
             ? resMatch[1].toLowerCase()
             : itemType === "gif"
-              ? "GIF"
+              ? "GIF (MP4)"
               : addedForVideo === 0
                 ? "HD"
                 : "SD";
@@ -160,7 +160,7 @@ function buildFxTwitterPayload(tweet, originalUrl, tweetId) {
       } else if (item.url && !seenUrls.has(item.url)) {
         seenUrls.add(item.url);
         downloads.push({
-          type: itemType === "gif" ? "GIF" : "MP4",
+          type: itemType === "gif" ? "GIF (MP4)" : "MP4",
           url: item.url,
           thumbnail: item.thumbnail_url || null,
           isMirror: false,
@@ -315,12 +315,13 @@ export async function scrapeTwitter(url, ...rest) {
   const tweetId = extractTweetId(url);
   const selectedSource = _selectedTwitterSource;
 
-  // In "Always Ask" mode (no source chosen yet), detect photo-only tweets via FxTwitter
-  // directly so users don't get prompted to pick between video-only TVD / SaveTWT servers.
-  if (!selectedSource && tweetId) {
+  // Detect photo-only tweets via FxTwitter directly so users don't get prompted to pick
+  // between video-only TVD / SaveTWT servers or wait for them to fail in preset/batch/share modes.
+  if (tweetId) {
     const tweet = await fetchFxTwitterTweet(tweetId);
     const fx = buildFxTwitterPayload(tweet, url, tweetId);
     if (fx && fx.photoCount > 0 && fx.videoCount === 0) {
+      _selectedTwitterSource = null;
       return rememberScrapeResult(fx.response);
     }
   }
@@ -346,8 +347,8 @@ export async function scrapeTwitter(url, ...rest) {
     Array.isArray(res.result?.downloads) &&
     res.result.downloads.length > 0
   ) {
-    // Enrich mixed photo+video tweets (TVD/SaveTWT drop photos when video is present)
-    // and ensure author handle is populated.
+    // Enrich mixed photo+video tweets (TVD/SaveTWT drop photos when video is present),
+    // upgrade any low-res pbs.twimg.com photo URLs to name=orig, and ensure author handle is populated.
     if (tweetId) {
       const tweet = await fetchFxTwitterTweet(tweetId);
       const fx = buildFxTwitterPayload(tweet, url, tweetId);
@@ -356,16 +357,25 @@ export async function scrapeTwitter(url, ...rest) {
           res.result.author = fx.author;
         }
         if (fx.photoItems.length > 0) {
-          const existingBaseUrls = new Set(
-            res.result.downloads.map((d) =>
-              String(d?.url || "").split("?")[0].toLowerCase(),
-            ),
-          );
+          const existingByBase = new Map();
+          for (const d of res.result.downloads) {
+            const base = String(d?.url || "").split("?")[0].toLowerCase();
+            if (base && !existingByBase.has(base)) {
+              existingByBase.set(base, d);
+            }
+          }
           for (const photo of fx.photoItems) {
             const base = photo.url.split("?")[0].toLowerCase();
-            if (!existingBaseUrls.has(base)) {
-              existingBaseUrls.add(base);
+            const existing = existingByBase.get(base);
+            if (!existing) {
+              existingByBase.set(base, photo);
               res.result.downloads.push(photo);
+            } else if (
+              typeof existing.url === "string" &&
+              existing.url.includes("pbs.twimg.com") &&
+              !/[?&]name=orig\b/i.test(existing.url)
+            ) {
+              existing.url = photo.url;
             }
           }
         }
@@ -374,8 +384,7 @@ export async function scrapeTwitter(url, ...rest) {
     return rememberScrapeResult(res);
   }
 
-  // Fallback to FxTwitter Direct for photo-only tweets (when server1/server2 is preset,
-  // in share overlay, or in batch mode) and when TVD/SaveTWT fail on videos/GIFs.
+  // Fallback to FxTwitter Direct when TVD/SaveTWT fail on videos/GIFs.
   if (tweetId) {
     const tweet = await fetchFxTwitterTweet(tweetId);
     const fx = buildFxTwitterPayload(tweet, url, tweetId);

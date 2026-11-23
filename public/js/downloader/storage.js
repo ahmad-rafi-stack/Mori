@@ -115,7 +115,10 @@ export async function probeContentLength(url, headers = {}) {
     }
   }
 
-  // 3. Fallback Range GET (bytes=0-0) via fetch ONLY so stream can always be cancelled/aborted
+  // 3. Fallback Range GET (bytes=0-0) via fetch ONLY when CapacitorHttp did not already respond
+  // (in Capacitor WebView, fetch strips Referer/User-Agent and fails CORS on most media CDNs)
+  if (nativeHeadStatus > 0) return 0;
+
   const rangeCtrl = new AbortController();
   const rangeTimer = setTimeout(() => rangeCtrl.abort(), 5000);
   let rangeRes = null;

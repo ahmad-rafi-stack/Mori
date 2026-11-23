@@ -288,6 +288,9 @@ const BACKUP_BLOCKED_KEYS = new Set([
   "mori_gallery_thumbs",
   "mori_patched_scraper_bin",
   "mori_active_scraper_version",
+  "mori_pin",
+  "mori_privacy_lock",
+  "mori_lock_type",
 ]);
 const MAX_BACKUP_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_SETTING_VAL_LENGTH = 50000;
@@ -436,7 +439,11 @@ export function importMoriBackupFromFile(file) {
             s.startsWith("file:") ||
             s.startsWith("_capacitor_file_") ||
             s.startsWith("thumb_") ||
-            s.startsWith("/")
+            s.startsWith("/") ||
+            s.startsWith("spotidown_resolve:") ||
+            s.startsWith("soundloaders_resolve:") ||
+            s.startsWith("youtube_resolve:") ||
+            s.startsWith("applemusic_resolve:")
           );
         };
 
@@ -714,8 +721,8 @@ function classifyHistoryRecord(rec) {
 }
 
 function mountHistorySearchAndFilter() {
-  const historyList = document.querySelector(".history-list") || document.getElementById("historyList");
-  if (!historyList || document.getElementById("moriHistoryFilterBar")) return;
+  const historyPage = document.getElementById("historyPage");
+  if (!historyPage || document.getElementById("moriHistoryFilterBar")) return;
 
   if (!document.getElementById("mori-history-filter-style")) {
     const st = document.createElement("style");
@@ -811,6 +818,7 @@ function mountHistorySearchAndFilter() {
   const bar = document.createElement("div");
   bar.id = "moriHistoryFilterBar";
   bar.className = "mori-history-filter-bar";
+  bar.style.display = "none";
   bar.innerHTML = `
     <div class="mori-history-search-wrap">
       <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" style="opacity:0.6;flex-shrink:0;">
@@ -827,16 +835,34 @@ function mountHistorySearchAndFilter() {
     </div>
   `;
 
-  historyList.parentElement?.insertBefore(bar, historyList);
+  const anchor =
+    historyPage.querySelector(".history-list") ||
+    historyPage.querySelector(".empty-state");
+  if (anchor) {
+    historyPage.insertBefore(bar, anchor);
+  } else {
+    historyPage.appendChild(bar);
+  }
 
   const applyFilter = () => {
+    const historyList =
+      historyPage.querySelector(".history-list") ||
+      document.getElementById("historyList");
+    if (!historyList) {
+      bar.style.display = "none";
+      return;
+    }
+
     const sortedHistory = getSortedHistory();
 
     const children = Array.from(historyList.children).filter(
       (el) => !el.classList.contains("mori-history-filter-empty"),
     );
 
-    if (children.length === 0 || (children.length === 1 && children[0].classList.contains("empty-history"))) {
+    if (
+      children.length === 0 ||
+      (children.length === 1 && children[0].classList.contains("empty-history"))
+    ) {
       bar.style.display = "none";
       return;
     }
@@ -853,13 +879,19 @@ function mountHistorySearchAndFilter() {
           sortedHistory.find((item) => item && item.url === cardUrl)) ||
         sortedHistory[idx] ||
         null;
-      const text = (card.textContent || "") + " " + (rec?.title || "") + " " + (rec?.url || "");
+      const text =
+        (card.textContent || "") +
+        " " +
+        (rec?.title || "") +
+        " " +
+        (rec?.url || "");
       const { fav, cat } = classifyHistoryRecord(rec);
 
       const matchesSearch = !q || text.toLowerCase().includes(q);
       const matchesTab =
         activeTab === "all" ||
-        (activeTab === "fav" && (fav || card.querySelector(".hist-fav-btn.active"))) ||
+        (activeTab === "fav" &&
+          (fav || card.querySelector(".hist-fav-btn.active"))) ||
         activeTab === cat;
 
       if (matchesSearch && matchesTab) {
@@ -875,7 +907,8 @@ function mountHistorySearchAndFilter() {
       if (!emptyEl) {
         emptyEl = document.createElement("div");
         emptyEl.className = "mori-history-filter-empty";
-        emptyEl.style.cssText = "text-align:center;padding:18px 10px;font-size:12px;opacity:0.65;";
+        emptyEl.style.cssText =
+          "text-align:center;padding:18px 10px;font-size:12px;opacity:0.65;";
         historyList.appendChild(emptyEl);
       }
       emptyEl.textContent = getHistoryFilterText("emptyMatch");
@@ -896,7 +929,9 @@ function mountHistorySearchAndFilter() {
 
   bar.querySelectorAll(".mori-history-chip").forEach((chip) => {
     chip.addEventListener("click", () => {
-      bar.querySelectorAll(".mori-history-chip").forEach((c) => c.classList.remove("active"));
+      bar
+        .querySelectorAll(".mori-history-chip")
+        .forEach((c) => c.classList.remove("active"));
       chip.classList.add("active");
       activeTab = chip.getAttribute("data-tab") || "all";
       applyFilter();
@@ -907,19 +942,24 @@ function mountHistorySearchAndFilter() {
     invalidateHistoryCache();
     applyFilter();
   });
-  obs.observe(historyList, { childList: true });
+  obs.observe(historyPage, { childList: true });
 
-  window.addEventListener("mori_history_updated", invalidateHistoryCache);
-  window.addEventListener("mori_favorite_toggled", invalidateHistoryCache);
-  window.addEventListener("mori_file_saved", invalidateHistoryCache);
+  const refreshHistoryFilter = () => {
+    invalidateHistoryCache();
+    applyFilter();
+  };
+  window.addEventListener("mori_history_updated", refreshHistoryFilter);
+  window.addEventListener("mori_favorite_toggled", refreshHistoryFilter);
+  window.addEventListener("mori_file_saved", refreshHistoryFilter);
 
   window.addEventListener("mori_language_changed", () => {
-    if (searchInput) searchInput.placeholder = getHistoryFilterText("searchPlaceholder");
+    if (searchInput)
+      searchInput.placeholder = getHistoryFilterText("searchPlaceholder");
     bar.querySelectorAll(".mori-history-chip").forEach((chip) => {
       const tab = chip.getAttribute("data-tab");
       if (tab) chip.textContent = getHistoryFilterText(tab);
     });
-    const emptyEl = historyList.querySelector(".mori-history-filter-empty");
+    const emptyEl = historyPage.querySelector(".mori-history-filter-empty");
     if (emptyEl) emptyEl.textContent = getHistoryFilterText("emptyMatch");
   });
 

@@ -112,7 +112,10 @@ function detectPlatform(url) {
   if (
     url.includes("twitter.com") ||
     /(?:^|[/.])x\.com(?:[/?#:]|$)/i.test(url) ||
-    /(?:^|[/.])t\.co(?:[/?#:]|$)/i.test(url)
+    /(?:^|[/.])t\.co(?:[/?#:]|$)/i.test(url) ||
+    url.includes("fxtwitter.com") ||
+    url.includes("vxtwitter.com") ||
+    url.includes("fixupx.com")
   )
     return "twitter";
   if (url.includes("spotify.com")) return "spotify";
@@ -384,6 +387,14 @@ function renderDownloadList(result) {
     lang["label-download"] || "DOWNLOAD"
   ).toUpperCase();
 
+  const esc = (s) =>
+    String(s ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+
   downloads.forEach((dl, idx) => {
     const btn = document.createElement("button");
     btn.className = "dl-item-btn";
@@ -398,10 +409,10 @@ function renderDownloadList(result) {
 
     btn.innerHTML = `
       <div style="text-align: left; flex: 1; min-width: 0; padding-right: 12px;">
-        <div style="font-weight:600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${optionLabel} ${idx + 1}</div>
-        <div class="dl-type" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${label}</div>
+        <div style="font-weight:600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${esc(optionLabel)} ${idx + 1}</div>
+        <div class="dl-type" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${esc(label)}</div>
       </div>
-      <div class="dl-badge" style="flex-shrink: 0;">${downloadBadgeText}</div>
+      <div class="dl-badge" style="flex-shrink: 0;">${esc(downloadBadgeText)}</div>
     `;
 
     btn.onclick = () => triggerDownload(dl, result.title || "Mori_Media", idx);
@@ -420,7 +431,13 @@ async function triggerDownload(dlItem, title, idx) {
     if (badge) badge.textContent = lang["label-saving"] || "SAVING...";
   }
 
-  const filename = generateFilename(title, dlItem.type, idx, activeResult?.author || "");
+  const filename = generateFilename(
+    title,
+    dlItem.type,
+    idx,
+    activeResult?.author || "",
+    dlItem.url || "",
+  );
   const folder = getFolderForPlatform(currentPlatform);
 
   let finalUrl = dlItem.url;
@@ -813,7 +830,7 @@ function getFolderForPlatform(platform) {
   return autoFolder && sub ? `${base}/${sub}` : base;
 }
 
-function generateFilename(title, type, index, author = "") {
+function generateFilename(title, type, index, author = "", url = "") {
   const cleanTypeLabel = (type || "")
     .replace(/\s*\[(MP3|MP4|JPG|PNG|WEBP|Cover|Audio|Video)\]/gi, "")
     .trim();
@@ -878,7 +895,7 @@ function generateFilename(title, type, index, author = "") {
     }
     const maxLen = slideSuffix ? 50 : 55;
     const trimmedCaption = sanitized.substring(0, maxLen).trim();
-    if (!trimmedCaption.includes(`(${cleanAuthor})`)) {
+    if (!trimmedCaption.toLowerCase().includes(`(${cleanAuthor.toLowerCase()})`)) {
       sanitized = trimmedCaption
         ? `${trimmedCaption}${slideSuffix} (${cleanAuthor})`
         : `${cleanAuthor}${slideSuffix}`;
@@ -895,18 +912,23 @@ function generateFilename(title, type, index, author = "") {
 
   let ext = "mp4";
   const t = (type || "").toLowerCase();
-  if (t.includes("mp3") || t.includes("audio")) ext = "mp3";
-  else if (t.includes("m4a")) ext = "m4a";
+  const u = (url || "").toLowerCase();
+  const fmtMatch = u.match(/[?&]format=(jpg|jpeg|png|webp)\b/i);
+  if (t.includes("mp3") || t.includes("audio") || /\.mp3(\?|$)/i.test(u)) ext = "mp3";
+  else if (t.includes("m4a") || /\.m4a(\?|$)/i.test(u)) ext = "m4a";
+  else if (t.includes("png") || /\.png(\?|$)/i.test(u) || fmtMatch?.[1] === "png") ext = "png";
+  else if (t.includes("webp") || /\.webp(\?|$)/i.test(u) || fmtMatch?.[1] === "webp") ext = "webp";
   else if (
     t.includes("jpg") ||
     t.includes("jpeg") ||
     t.includes("image") ||
     t.includes("photo") ||
-    t.includes("cover")
+    t.includes("cover") ||
+    /\.jpe?g(\?|$)/i.test(u) ||
+    fmtMatch?.[1] === "jpg" ||
+    fmtMatch?.[1] === "jpeg"
   )
     ext = "jpg";
-  else if (t.includes("png")) ext = "png";
-  else if (t.includes("webp")) ext = "webp";
 
   ext = ext.toLowerCase();
 

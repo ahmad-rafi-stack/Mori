@@ -48,11 +48,20 @@ function injectOptionSizeStyles() {
 
 const MAX_CONCURRENT_PROBES = 3;
 const MAX_PROBE_ITEMS = 20;
+const MAX_PROBE_CACHE = 100;
 const MIN_DISPLAY_BYTES = 4096;
 const probedSizeCache = new Map();
 const probeQueue = [];
 let activeProbeCount = 0;
 let historyRetryTimer = null;
+
+function setProbedSizeCache(url, sz) {
+  if (probedSizeCache.size >= MAX_PROBE_CACHE) {
+    const oldestKey = probedSizeCache.keys().next().value;
+    if (oldestKey !== undefined) probedSizeCache.delete(oldestKey);
+  }
+  probedSizeCache.set(url, sz);
+}
 
 function enqueueSizeProbe(url, headers) {
   if (probedSizeCache.has(url)) {
@@ -74,7 +83,7 @@ function processProbeQueue() {
     activeProbeCount++;
     probeContentLength(task.url, task.headers)
       .then((sz) => {
-        if (sz >= MIN_DISPLAY_BYTES) probedSizeCache.set(task.url, sz);
+        if (sz >= MIN_DISPLAY_BYTES) setProbedSizeCache(task.url, sz);
         task.resolve(sz);
       })
       .catch(() => {

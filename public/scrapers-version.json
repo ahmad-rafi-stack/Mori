@@ -2,6 +2,6 @@
   "scraperVersion": 6,
   "updatedAt": 1795046700000,
   "minAppVersion": "4.3.0",
-  "sourceHash": "42772008c118455c11604480d7cdf6d55d328569f389f6fdfdbeb41f08d7b8b3",
+  "sourceHash": "f69946ee523c46a60e32d15d570ad2632210eb4dbf8d6b0adb1d14615c9ae292",
   "changelog": "Add Twitter/X photo & multi-photo extraction via FxTwitter, complete cross-platform author extraction, and harden downloader & backup utilities"
 }

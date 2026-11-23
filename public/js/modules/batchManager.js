@@ -129,7 +129,8 @@ export async function analyzeUrlSilent(url, preferServer = "auto") {
       url.includes("twitter.com") ||
       /(?:^|[/.])x\.com(?:[/?#:]|$)/i.test(url) ||
       url.includes("fxtwitter.com") ||
-      url.includes("vxtwitter.com")
+      url.includes("vxtwitter.com") ||
+      url.includes("fixupx.com")
     ) {
       setTwitterSource(isServer2 ? "savetwt" : "tvd");
       data = await scrapeTwitter(url);

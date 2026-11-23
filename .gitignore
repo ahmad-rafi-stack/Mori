@@ -48,4 +48,5 @@ npm-debug.log*
 src-scrapers/
 scripts/*
 !scripts/check-syntax.js
+!scripts/test-fork.mjs
 android/app/src/main/cpp/
