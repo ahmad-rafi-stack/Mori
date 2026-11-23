@@ -1,6 +1,8 @@
 // downloadBubble.js — Floating Download Bubble with Multi-Download Dropup Manager
 import { t } from "../i18n/index.js";
 import { triggerHaptic } from "../utils/device.js";
+import { probeContentLength } from "../downloader/storage.js";
+import { buildDownloadHeaders } from "../downloader/headers.js";
 
 const escapeHtml = (s) =>
   String(s || "").replace(/[&<>"']/g, (m) =>
@@ -18,6 +20,213 @@ const truncateTitle = (s, max = 22) => {
   if (str.length <= max) return str;
   return str.slice(0, max).trim() + "...";
 };
+
+export function formatBytesToMB(bytes) {
+  if (typeof bytes !== "number" || isNaN(bytes) || bytes < 0) return "0.0 MB";
+  const mb = bytes / (1024 * 1024);
+  if (mb < 0.1 && bytes > 0) {
+    const kb = Math.max(1, Math.round(bytes / 1024));
+    return `${kb} KB`;
+  }
+  return `${mb.toFixed(1)} MB`;
+}
+
+function injectOptionSizeStyles() {
+  if (typeof document === "undefined" || document.getElementById("mori-opt-size-styles")) return;
+  const style = document.createElement("style");
+  style.id = "mori-opt-size-styles";
+  style.textContent = `
+    .dl-opt-size {
+      opacity: 0.75;
+      font-size: 0.88em;
+      font-weight: 500;
+      margin-left: 5px;
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+const MAX_CONCURRENT_PROBES = 3;
+const MAX_PROBE_ITEMS = 20;
+const MAX_PROBE_CACHE = 100;
+const MIN_DISPLAY_BYTES = 4096;
+const probedSizeCache = new Map();
+const probeQueue = [];
+let activeProbeCount = 0;
+let historyRetryTimer = null;
+
+function setProbedSizeCache(url, sz) {
+  if (probedSizeCache.size >= MAX_PROBE_CACHE) {
+    const oldestKey = probedSizeCache.keys().next().value;
+    if (oldestKey !== undefined) probedSizeCache.delete(oldestKey);
+  }
+  probedSizeCache.set(url, sz);
+}
+
+function enqueueSizeProbe(url, headers) {
+  if (probedSizeCache.has(url)) {
+    return Promise.resolve(probedSizeCache.get(url));
+  }
+  return new Promise((resolve) => {
+    probeQueue.push({ url, headers, resolve });
+    processProbeQueue();
+  });
+}
+
+function processProbeQueue() {
+  while (activeProbeCount < MAX_CONCURRENT_PROBES && probeQueue.length > 0) {
+    const task = probeQueue.shift();
+    if (probedSizeCache.has(task.url)) {
+      task.resolve(probedSizeCache.get(task.url));
+      continue;
+    }
+    activeProbeCount++;
+    probeContentLength(task.url, task.headers)
+      .then((sz) => {
+        if (sz >= MIN_DISPLAY_BYTES) setProbedSizeCache(task.url, sz);
+        task.resolve(sz);
+      })
+      .catch(() => {
+        task.resolve(0);
+      })
+      .finally(() => {
+        activeProbeCount--;
+        processProbeQueue();
+      });
+  }
+}
+
+function normalizeUrlForMatch(u) {
+  return String(u || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\?.*$/, "")
+    .replace(/\/+$/, "");
+}
+
+function findMatchingHistoryItem(historyList, rawUrl) {
+  if (!Array.isArray(historyList) || historyList.length === 0) return null;
+  const normRaw = normalizeUrlForMatch(rawUrl);
+  if (normRaw) {
+    const exact = historyList.find((item) => {
+      if (!item) return false;
+      const u1 = normalizeUrlForMatch(item.url);
+      const u2 = normalizeUrlForMatch(item.sourceUrl);
+      return (
+        u1 === normRaw ||
+        u2 === normRaw ||
+        (u1 && normRaw.includes(u1)) ||
+        (u2 && normRaw.includes(u2))
+      );
+    });
+    if (exact) return exact;
+  }
+  if (localStorage.getItem("mori_incognito") === "true") {
+    return null;
+  }
+  return historyList.reduce((latest, item) => {
+    if (!item) return latest;
+    if (!latest) return item;
+    return (item.timestamp || 0) > (latest.timestamp || 0) ? item : latest;
+  }, null);
+}
+
+function resolveActiveResultItem(rawUrl) {
+  // 1. Prefer in-memory last scrape result (works in Incognito Mode too without touching localStorage)
+  const memResult = typeof window !== "undefined" ? window.__moriLastScrapeResult : null;
+  if (memResult && Array.isArray(memResult.downloads) && memResult.downloads.length > 0) {
+    const normRaw = normalizeUrlForMatch(rawUrl);
+    const normMem = normalizeUrlForMatch(memResult.sourceUrl || memResult.url);
+    if (!normRaw || !normMem || normMem === normRaw || normRaw.includes(normMem) || normMem.includes(normRaw)) {
+      return memResult;
+    }
+  }
+
+  // 2. Fallback to persisted history
+  let historyList = [];
+  try {
+    historyList = JSON.parse(localStorage.getItem("mori_history") || "[]");
+  } catch (_) {}
+  return findMatchingHistoryItem(historyList, rawUrl);
+}
+
+function isExportPdfButton(btn) {
+  if (!btn) return false;
+  if (
+    btn.classList.contains("pdf-btn") ||
+    btn.classList.contains("dl-pdf-btn") ||
+    btn.classList.contains("pdf-export-btn")
+  ) {
+    return true;
+  }
+  const txt = (btn.textContent || "").toLowerCase();
+  return txt.includes("export pdf") || txt.includes("pdf gallery") || txt.includes("ekspor pdf");
+}
+
+function enhanceDownloadOptions() {
+  if (typeof document === "undefined") return;
+  const downloadList = document.getElementById("downloadList");
+  if (!downloadList) return;
+
+  const btns = Array.from(
+    downloadList.querySelectorAll(".dl-item:not(.dl-all-btn):not(.dl-pdf-btn):not(.pdf-btn)"),
+  ).filter((btn) => !isExportPdfButton(btn));
+  if (btns.length === 0) return;
+
+  // Avoid unnecessary localStorage parsing if every button is already enhanced
+  const hasPending = btns.some((btn) => btn.dataset.sizeEnhanced !== "true");
+  if (!hasPending) return;
+
+  const urlInput = document.getElementById("urlInput");
+  const rawUrl = (urlInput?.value?.trim() || window._moriActiveDownloadUrl || "").toLowerCase();
+
+  const latestItem = resolveActiveResultItem(rawUrl);
+  const downloads = latestItem?.downloads || [];
+
+  if (downloads.length === 0 && localStorage.getItem("mori_incognito") !== "true") {
+    if (!historyRetryTimer) {
+      historyRetryTimer = setTimeout(() => {
+        historyRetryTimer = null;
+        enhanceDownloadOptions();
+      }, 150);
+    }
+    return;
+  }
+
+  btns.forEach((btn, idx) => {
+    if (btn.dataset.sizeEnhanced === "true") return;
+    const dl = downloads[idx];
+    if (!dl) return;
+    btn.dataset.sizeEnhanced = "true";
+
+    const textSpan = btn.querySelector("span:not(.dl-all-title):not(.dl-badge)");
+    if (!textSpan) return;
+
+    let szSpan = textSpan.querySelector(".dl-opt-size");
+    if (!szSpan) {
+      szSpan = document.createElement("span");
+      szSpan.className = "dl-opt-size";
+      textSpan.appendChild(szSpan);
+    }
+
+    if (dl.size) {
+      const formatted = typeof dl.size === "number" ? formatBytesToMB(dl.size) : dl.size;
+      szSpan.textContent = ` (${formatted})`;
+    } else if (idx < MAX_PROBE_ITEMS && dl.url && dl.url.startsWith("http")) {
+      const headers = buildDownloadHeaders(
+        dl.url,
+        latestItem?.sourceUrl || latestItem?.url || rawUrl,
+        dl.url,
+        dl.headers,
+      );
+      enqueueSizeProbe(dl.url, headers).then((sz) => {
+        if (sz >= MIN_DISPLAY_BYTES && btn.contains(szSpan)) {
+          szSpan.textContent = ` (${formatBytesToMB(sz)})`;
+        }
+      });
+    }
+  });
+}
 
 class DownloadBubbleManager {
   constructor() {
@@ -48,13 +257,35 @@ class DownloadBubbleManager {
   init() {
     if (this.isShareOverlay()) return;
     if (document.readyState === "loading") {
-      document.addEventListener("DOMContentLoaded", () => this.ensureMounted());
+      document.addEventListener("DOMContentLoaded", () => {
+        this.ensureMounted();
+        this.initListObserver();
+      });
     } else {
       this.ensureMounted();
+      this.initListObserver();
     }
     window.addEventListener("mori_language_changed", () => {
       this.refreshTranslations();
     });
+  }
+
+  initListObserver() {
+    injectOptionSizeStyles();
+    const attachObserver = () => {
+      const downloadList = document.getElementById("downloadList");
+      if (downloadList) {
+        enhanceDownloadOptions();
+        // Observe direct children only so updating .dl-opt-size text doesn't self-trigger
+        const observer = new MutationObserver(() => {
+          enhanceDownloadOptions();
+        });
+        observer.observe(downloadList, { childList: true });
+      } else {
+        setTimeout(attachObserver, 250);
+      }
+    };
+    attachObserver();
   }
 
   refreshTranslations() {

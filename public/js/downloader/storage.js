@@ -30,6 +30,132 @@ export async function deleteSavedFile(savedFile, directoriesToTry) {
   }
 }
 
+const MIN_VALID_MEDIA_BYTES = 4096;
+
+function getHeaderCaseInsensitive(headersObj, name) {
+  if (!headersObj || typeof headersObj !== "object") return "";
+  const target = name.toLowerCase();
+  for (const key of Object.keys(headersObj)) {
+    if (key.toLowerCase() === target) {
+      return headersObj[key] ?? "";
+    }
+  }
+  return "";
+}
+
+/**
+ * Probes Content-Length header if not yet reported by native stream.
+ * Never buffers full bodies via CapacitorHttp GET to prevent OOM / data waste.
+ */
+export async function probeContentLength(url, headers = {}) {
+  if (!url || typeof url !== "string" || !url.startsWith("http")) return 0;
+
+  const isInvalidContentType = (ct) => {
+    const s = String(ct || "").toLowerCase();
+    return (
+      s.includes("text/html") ||
+      s.includes("text/plain") ||
+      s.includes("application/json") ||
+      s.includes("application/problem+json") ||
+      s.includes("application/xml") ||
+      s.includes("text/xml")
+    );
+  };
+
+  let nativeHeadStatus = 0;
+
+  // 1. HEAD request via CapacitorHttp (safe: no response body)
+  try {
+    if (CapacitorHttp?.request) {
+      const headRes = await CapacitorHttp.request({
+        method: "HEAD",
+        url,
+        headers,
+        connectTimeout: 6000,
+        readTimeout: 6000,
+      });
+      nativeHeadStatus = headRes?.status || 0;
+      if (nativeHeadStatus === 403 || nativeHeadStatus === 404 || nativeHeadStatus === 410) {
+        return 0;
+      }
+      if (nativeHeadStatus >= 200 && nativeHeadStatus < 400) {
+        const h = headRes?.headers || {};
+        const ct = getHeaderCaseInsensitive(h, "content-type");
+        if (!isInvalidContentType(ct)) {
+          const parsed = parseInt(getHeaderCaseInsensitive(h, "content-length") || "0", 10);
+          if (parsed >= MIN_VALID_MEDIA_BYTES) return parsed;
+        }
+      }
+    }
+  } catch (_) {}
+
+  // 2. HEAD request via fetch (only if CapacitorHttp was unavailable or errored)
+  if (nativeHeadStatus === 0) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5000);
+    try {
+      const res = await fetch(url, {
+        method: "HEAD",
+        headers,
+        signal: ctrl.signal,
+      });
+      if (res.status === 403 || res.status === 404 || res.status === 410) {
+        return 0;
+      }
+      if (res.status >= 200 && res.status < 400) {
+        const ct = res.headers.get("content-type") || "";
+        if (!isInvalidContentType(ct)) {
+          const parsed = parseInt(res.headers.get("content-length") || "0", 10);
+          if (parsed >= MIN_VALID_MEDIA_BYTES) return parsed;
+        }
+      }
+    } catch (_) {
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  // 3. Fallback Range GET (bytes=0-0) via fetch ONLY when CapacitorHttp did not already respond
+  // (in Capacitor WebView, fetch strips Referer/User-Agent and fails CORS on most media CDNs)
+  if (nativeHeadStatus > 0) return 0;
+
+  const rangeCtrl = new AbortController();
+  const rangeTimer = setTimeout(() => rangeCtrl.abort(), 5000);
+  let rangeRes = null;
+  try {
+    rangeRes = await fetch(url, {
+      method: "GET",
+      headers: { ...headers, Range: "bytes=0-0" },
+      signal: rangeCtrl.signal,
+    });
+    if (rangeRes.status >= 200 && rangeRes.status < 400) {
+      const ct = rangeRes.headers.get("content-type") || "";
+      if (!isInvalidContentType(ct)) {
+        const cr = rangeRes.headers.get("content-range") || "";
+        const match = cr.match(/\/(\d+)$/);
+        if (match && match[1]) {
+          const total = parseInt(match[1], 10);
+          if (total >= MIN_VALID_MEDIA_BYTES) return total;
+        }
+        // Only trust Content-Length when server returned full 200 OK (not 206 which reports 1 byte)
+        if (rangeRes.status === 200) {
+          const parsed = parseInt(rangeRes.headers.get("content-length") || "0", 10);
+          if (parsed >= MIN_VALID_MEDIA_BYTES) return parsed;
+        }
+      }
+    }
+  } catch (_) {
+  } finally {
+    clearTimeout(rangeTimer);
+    try {
+      rangeRes?.body?.cancel?.().catch(() => {});
+    } catch (_) {}
+    rangeCtrl.abort();
+  }
+
+  return 0;
+}
+
 /**
  * Executes file download using Capacitor Filesystem or CapacitorHttp fallback
  */
