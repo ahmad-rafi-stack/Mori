@@ -66,9 +66,15 @@ export function renderMediaSlides(container, items, resultThumbnail) {
         upperType.includes("WAV") ||
         upperType.includes("AUDIO"));
 
+    const isVideoUrl =
+      lowerUrl.includes(".mp4") ||
+      lowerUrl.includes(".m3u8") ||
+      lowerUrl.includes("video.twimg.com");
+
     const isImage =
       !isPdf &&
       !isAudio &&
+      !isVideoUrl &&
       (lowerUrl.includes(".jpg") ||
         lowerUrl.includes(".jpeg") ||
         lowerUrl.includes(".png") ||
@@ -83,12 +89,12 @@ export function renderMediaSlides(container, items, resultThumbnail) {
       !isImage &&
       !isAudio &&
       !isPdf &&
-      (lowerUrl.includes(".mp4") ||
-        lowerUrl.includes(".m3u8") ||
+      (isVideoUrl ||
         lowerUrl.includes("video") ||
         upperType.includes("VIDEO") ||
         upperType.includes("MP4") ||
-        /\d+p/i.test(upperType));
+        /\d+p/i.test(upperType) ||
+        /^\d+x\d+$/i.test(upperType));
 
     const isLocal =
       dl.url.includes("_capacitor_file_") ||
@@ -826,16 +832,24 @@ export function renderResult(result, originalUrl) {
     let titleText = "";
     let countText = "";
 
+    const allDownloads = result.downloads || [];
+    const targetIndices = isMultiTrackContent
+      ? allDownloads.map((_, i) => i)
+      : allDownloads
+          .map((d, i) => (!d?.isMirror ? i : -1))
+          .filter((i) => i !== -1);
+    const allTargetsArePhotos =
+      targetIndices.length > 0 &&
+      targetIndices.every((i) => photoDownloads.includes(allDownloads[i]));
+
     const isMultiItem =
-      (isMultiTrackContent || isMultiPhoto) &&
-      result.downloads &&
-      result.downloads.length >= 2;
+      (isMultiTrackContent || isMultiPhoto) && targetIndices.length >= 2;
 
     if (isMultiItem) {
       allBtn = document.createElement("button");
       allBtn.className = "dl-item dl-all-btn";
 
-      if (isMultiPhoto && !isMultiTrackContent) {
+      if (isMultiPhoto && !isMultiTrackContent && allTargetsArePhotos) {
         titleText =
           translations[currentLang]["btn-download-all-photos"] ||
           translations[currentLang]["batch-photo-all"] ||
@@ -845,13 +859,13 @@ export function renderResult(result, originalUrl) {
           translations[currentLang]["label-photos-count"] ||
           translations[currentLang]["label-items-count"] ||
           "${count} Photos";
-        countText = rawPhotoCount.replace("${count}", result.downloads.length);
+        countText = rawPhotoCount.replace("${count}", targetIndices.length);
       } else {
         titleText =
           translations[currentLang]["btn-download-all-title"] || "Download All";
         const rawCountText =
           translations[currentLang]["label-items-count"] || "${count} Items";
-        countText = rawCountText.replace("${count}", result.downloads.length);
+        countText = rawCountText.replace("${count}", targetIndices.length);
       }
 
       allBtn.innerHTML = `
@@ -884,7 +898,7 @@ export function renderResult(result, originalUrl) {
         // Keep screen awake throughout playlist download
         await requestWakeLock(true);
 
-        const total = result.downloads.length;
+        const total = targetIndices.length;
         const progressStr =
           translations[currentLang]["downloading-progress"] || "Downloading...";
         const cancelLabel = translations[currentLang]["btn-cancel"] || "Cancel";
@@ -896,7 +910,7 @@ export function renderResult(result, originalUrl) {
         const isRetryMode = failedIndices.length > 0;
         const indicesToProcess = isRetryMode
           ? [...failedIndices]
-          : Array.from({ length: total }, (_, i) => i);
+          : [...targetIndices];
 
         // Show cancel affordance in badge
         if (badgeEl) {
@@ -1449,7 +1463,11 @@ export async function exportGalleryToPdf(
       else if (
         firstUrl.includes("twitter") ||
         /(?:^|[/.])x\.com(?:[/?#:]|$)/i.test(firstUrl) ||
-        /(?:^|[/.])t\.co(?:[/?#:]|$)/i.test(firstUrl)
+        /(?:^|[/.])t\.co(?:[/?#:]|$)/i.test(firstUrl) ||
+        firstUrl.includes("fxtwitter.com") ||
+        firstUrl.includes("vxtwitter.com") ||
+        firstUrl.includes("fixupx.com") ||
+        firstUrl.includes("twimg.com")
       )
         platformFolder = "Twitter";
       else if (
