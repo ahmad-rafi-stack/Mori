@@ -395,9 +395,14 @@ function persistThumb(path, dataUrl) {
   saveThumbTimeout = setTimeout(() => {
     try {
       const obj = {};
-      const entries = Array.from(memoryThumbCache.entries()).slice(-250);
+      const entries = Array.from(memoryThumbCache.entries()).slice(-200);
       for (const [k, v] of entries) {
-        obj[k] = v;
+        if (
+          typeof v === "string" &&
+          (!v.startsWith("data:") || v.length < 5000)
+        ) {
+          obj[k] = v;
+        }
       }
       localStorage.setItem(GALLERY_THUMB_KEY, JSON.stringify(obj));
     } catch (_) {}
@@ -405,7 +410,11 @@ function persistThumb(path, dataUrl) {
 }
 
 function isValidThumb(t) {
-  return typeof t === "string" && t.length > 0 && !t.startsWith("thumb_");
+  return (
+    typeof t === "string" &&
+    t.length > 0 &&
+    (!t.startsWith("thumb_") || t.includes("/"))
+  );
 }
 
 function getThumbFromHistory(item) {
@@ -461,7 +470,7 @@ export async function deleteGalleryItem(item) {
     }
   }
 
-  // 3. Capacitor Filesystem fallback
+  // 2. Capacitor Filesystem fallback
   if (!deleted && Filesystem) {
     if (item.directory && item.path) {
       try {
@@ -621,7 +630,7 @@ function extractCanvasThumb(mediaUrl, onData) {
       if (timer) clearTimeout(timer);
       try {
         const canvas = document.createElement("canvas");
-        const maxDim = 640;
+        const maxDim = 320;
         const scale = Math.min(
           maxDim / video.videoWidth,
           maxDim / video.videoHeight,
@@ -631,7 +640,7 @@ function extractCanvasThumb(mediaUrl, onData) {
         canvas.height = Math.round(video.videoHeight * scale);
         const ctx = canvas.getContext("2d");
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.65);
         onData(dataUrl);
       } catch (_) {}
       cleanup();
@@ -656,7 +665,7 @@ function extractCanvasThumb(mediaUrl, onData) {
   video.addEventListener("error", cleanup);
 
   const canFragment =
-    /^(https?|file|asset|tauri):/i.test(mediaUrl) || mediaUrl.startsWith("/");
+    /^(https?|file|asset):/i.test(mediaUrl) || mediaUrl.startsWith("/");
   video.src = canFragment ? `${mediaUrl}#t=0.5` : mediaUrl;
 }
 
@@ -1261,7 +1270,7 @@ function openFileExternal(item) {
       if (window.MoriMainBridge.openFile(rawPath)) return;
     } catch (_) {}
   }
-  // 3. Fallback
+  // 2. Fallback
   const url = toLocalMediaUrl(rawPath);
   if (url) {
     window.open(url, "_blank");
@@ -1269,6 +1278,7 @@ function openFileExternal(item) {
 }
 
 async function fetchPdfBytes(item) {
+
   const url = toLocalMediaUrl(item.path);
   if (url) {
     try {
@@ -1539,17 +1549,6 @@ function renderAudioInViewer(body, item, mediaUrl) {
       audio.play().catch(() => {});
     }
   });
-
-  let cleanPath = item.path || mediaUrl || "";
-  if (cleanPath.includes("_capacitor_file_")) {
-    cleanPath = cleanPath.substring(cleanPath.indexOf("_capacitor_file_") + 16);
-  }
-  if (cleanPath.startsWith("file://")) {
-    cleanPath = cleanPath.replace(/^file:\/\//, "");
-  }
-  try {
-    cleanPath = decodeURIComponent(cleanPath);
-  } catch (_) {}
 
   audio.src = mediaUrl;
   if (autoPlaySetting) audio.play().catch(() => {});

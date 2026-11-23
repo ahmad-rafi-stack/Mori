@@ -41,11 +41,11 @@ export function setupCustomSelect(selectId, storageKey, textId, menuId) {
         : storageKey === "mori_anim_speed"
           ? "normal"
           : storageKey === "mori_text_size"
-            ? "medium"
+            ? "small"
             : storageKey === "mori_glassmorphism"
               ? "subtle"
               : storageKey === "mori_ui_corner"
-                ? "modern"
+                ? "sharp"
                 : storageKey === "mori_sound_pack"
                   ? "chime"
                   : storageKey === "mori_concurrent"
@@ -58,9 +58,11 @@ export function setupCustomSelect(selectId, storageKey, textId, menuId) {
                           ? "off"
                           : storageKey === "mori_toast_dur"
                             ? "3"
-                            : storageKey === "mori_lang"
-                              ? currentLang
-                              : "default";
+                            : storageKey === "mori_batch_format"
+                              ? "video"
+                              : storageKey === "mori_lang"
+                                ? currentLang
+                                : "default";
   const currentVal = localStorage.getItem(storageKey) || defaultFallback;
 
   // Update display on load
@@ -88,12 +90,22 @@ export function setupCustomSelect(selectId, storageKey, textId, menuId) {
       select.closest(".settings-item")?.classList.add("active-dropdown");
       menu.classList.remove("open-up");
 
-      const rect = menu.getBoundingClientRect();
+      const selectRect = select.getBoundingClientRect();
+      const menuRect = menu.getBoundingClientRect();
       const viewportHeight = window.innerHeight;
+      const spaceBelow = viewportHeight - selectRect.bottom - 16;
+      const spaceAbove = selectRect.top - 16;
 
-      // Flip upward if overflowing bottom
-      if (rect.bottom > viewportHeight - 20) {
+      // Flip upward only if overflowing bottom AND there is more space above
+      if (menuRect.bottom > viewportHeight - 16 && spaceAbove > spaceBelow) {
         menu.classList.add("open-up");
+      }
+
+      // Ensure active item is visible in scrollable dropdown
+      const activeVal = localStorage.getItem(storageKey) || defaultFallback;
+      const activeItem = menu.querySelector(`[data-value="${activeVal}"]`);
+      if (activeItem) {
+        activeItem.scrollIntoView({ block: "nearest" });
       }
     } else {
       select.closest(".settings-item")?.classList.remove("active-dropdown");
@@ -121,6 +133,22 @@ export function setupCustomSelect(selectId, storageKey, textId, menuId) {
       if (storageKey === "mori_ui_corner") applyUiCorner();
       if (storageKey === "mori_sound_pack") previewSound(val);
 
+      if (storageKey === "mori_filename") {
+        const customFilenameBox = document.getElementById("customFilenameBox");
+        const customFilenameInput = document.getElementById("customFilenameInput");
+        if (val === "custom") {
+          customFilenameBox?.classList.remove("hidden");
+          if (customFilenameInput) {
+            customFilenameInput.value =
+              localStorage.getItem("mori_filename_custom") ||
+              "{platform}_{date}_{num}";
+            customFilenameInput.focus();
+          }
+        } else {
+          customFilenameBox?.classList.add("hidden");
+        }
+      }
+
       const labelText =
         select.closest(".settings-item")?.querySelector(".settings-title span")
           ?.textContent || "Setting";
@@ -137,6 +165,19 @@ export function updateCustomSelectsUI() {
   if (filenameText)
     filenameText.textContent =
       lang[`filename-${currentFilename}`] || currentFilename;
+
+  const customFilenameBox = document.getElementById("customFilenameBox");
+  const customFilenameInput = document.getElementById("customFilenameInput");
+  if (customFilenameBox && customFilenameInput) {
+    if (currentFilename === "custom") {
+      customFilenameBox.classList.remove("hidden");
+      customFilenameInput.value =
+        localStorage.getItem("mori_filename_custom") ||
+        "{platform}_{date}_{num}";
+    } else {
+      customFilenameBox.classList.add("hidden");
+    }
+  }
 
   const currentUA = localStorage.getItem("mori_user_agent") || "default";
   const userAgentText = document.getElementById("userAgentText");
@@ -199,6 +240,13 @@ export function updateCustomSelectsUI() {
     batchPhotoModeText.textContent =
       lang[`batch-photo-${currentBatchPhoto}`] || currentBatchPhoto;
 
+  const currentBatchFormat =
+    localStorage.getItem("mori_batch_format") || "video";
+  const batchFormatText = document.getElementById("batchFormatText");
+  if (batchFormatText)
+    batchFormatText.textContent =
+      lang[`batch-format-${currentBatchFormat}`] || currentBatchFormat;
+
   const currentBackup = localStorage.getItem("mori_auto_backup") || "off";
   const autoBackupText = document.getElementById("autoBackupText");
   if (autoBackupText) {
@@ -217,7 +265,7 @@ export function updateCustomSelectsUI() {
     animSpeedText.textContent =
       lang[`anim-${currentAnimSpeed}`] || currentAnimSpeed;
 
-  const currentTextSize = localStorage.getItem("mori_text_size") || "medium";
+  const currentTextSize = localStorage.getItem("mori_text_size") || "small";
   const textSizeText = document.getElementById("textSizeText");
   if (textSizeText)
     textSizeText.textContent =
@@ -256,7 +304,7 @@ export function updateCustomSelectsUI() {
   if (glassText)
     glassText.textContent = lang[`glass-${currentGlass}`] || currentGlass;
 
-  const currentCorner = localStorage.getItem("mori_ui_corner") || "modern";
+  const currentCorner = localStorage.getItem("mori_ui_corner") || "sharp";
   const cornerText = document.getElementById("cornerText");
   if (cornerText)
     cornerText.textContent = lang[`corner-${currentCorner}`] || currentCorner;
@@ -283,6 +331,16 @@ export function updateLanguageUI() {
     const val = lang?.[key] ?? fallback[key];
     if (val !== undefined) el.placeholder = val;
   });
+  document.querySelectorAll("[data-i18n-aria]").forEach((el) => {
+    const key = el.getAttribute("data-i18n-aria");
+    const val = lang?.[key] ?? fallback[key];
+    if (val !== undefined) el.setAttribute("aria-label", val);
+  });
+  document.querySelectorAll("[data-i18n-title]").forEach((el) => {
+    const key = el.getAttribute("data-i18n-title");
+    const val = lang?.[key] ?? fallback[key];
+    if (val !== undefined) el.setAttribute("title", val);
+  });
 
   if (currentLangDisplay) {
     const langNames = {
@@ -295,6 +353,7 @@ export function updateLanguageUI() {
       ru: "Русский",
       tl: "Tagalog",
       hi: "हिन्दी",
+      es: "Español",
     };
     currentLangDisplay.textContent = langNames[currentLang] || "English";
   }
@@ -334,6 +393,7 @@ export function switchLanguage(lang) {
   else if (currentLang === "ru") msg = "Язык обновлен";
   else if (currentLang === "tl") msg = "Na-update ang wika";
   else if (currentLang === "hi") msg = "भाषा अपडेट हो गई";
+  else if (currentLang === "es") msg = "Idioma actualizado";
   showToast(msg);
 }
 
@@ -350,6 +410,7 @@ export function initLanguageAndNavigation() {
   setupCustomSelect("autoClearCacheDaysSelect", "mori_auto_clear_cache_days", "autoClearCacheDaysText", "autoClearCacheDaysMenu");
   setupCustomSelect("preferServerSelect", "mori_prefer_server", "preferServerText", "preferServerMenu");
   setupCustomSelect("batchPhotoModeSelect", "mori_batch_photo_mode", "batchPhotoModeText", "batchPhotoModeMenu");
+  setupCustomSelect("batchFormatSelect", "mori_batch_format", "batchFormatText", "batchFormatMenu");
   setupCustomSelect("userAgentSelect", "mori_user_agent", "userAgentText", "userAgentMenu");
   setupCustomSelect("requestTimeoutSelect", "mori_request_timeout", "requestTimeoutText", "requestTimeoutMenu");
   setupCustomSelect("animSpeedSelect", "mori_anim_speed", "animSpeedText", "animSpeedMenu");
@@ -362,6 +423,15 @@ export function initLanguageAndNavigation() {
   setupCustomSelect("maxRetrySelect", "mori_max_retry", "maxRetryText", "maxRetryMenu");
   setupCustomSelect("dohSelect", "mori_doh", "dohText", "dohMenu");
   setupCustomSelect("toastDurSelect", "mori_toast_dur", "toastDurText", "toastDurMenu");
+
+  const customFilenameInput = document.getElementById("customFilenameInput");
+  if (customFilenameInput) {
+    customFilenameInput.addEventListener("input", (e) => {
+      const val = e.target.value.trim();
+      localStorage.setItem("mori_filename_custom", val);
+      syncSettingToNative("mori_filename_custom", val);
+    });
+  }
 
   // 2. Sub-page Navigation
   document.addEventListener("click", (e) => {
@@ -413,7 +483,9 @@ export function initLanguageAndNavigation() {
             if (v !== null) preserved[k] = v;
           });
           Object.keys(localStorage)
-            .filter((k) => k.startsWith("mori_"))
+            .filter(
+              (k) => k.startsWith("mori_") && !k.startsWith("mori_counter_"),
+            )
             .forEach((k) => localStorage.removeItem(k));
           Object.entries(preserved).forEach(([k, v]) =>
             localStorage.setItem(k, v),
@@ -442,7 +514,14 @@ export function initLanguageAndNavigation() {
     }
   });
 
-  // 5. Close dropdowns when clicking outside
+  // 5. WhatsApp Channel Button
+  const waChannelAboutBtn = document.getElementById("waChannelAboutBtn");
+  waChannelAboutBtn?.addEventListener("click", (e) => {
+    e.preventDefault();
+    openExternalUrl("https://whatsapp.com/channel/0029VbDXoqs6mYPSVp4UcT2A");
+  });
+
+  // 6. Close dropdowns when clicking outside
   document.addEventListener("click", () => {
     document
       .querySelectorAll(".dropdown-menu")

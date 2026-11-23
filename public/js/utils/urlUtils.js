@@ -3,16 +3,21 @@
  * Handles URL extraction, protocol normalization, and tracker parameter stripping.
  */
 
+import { firstHttpUrl, parseShareText } from "./shareLink.js";
+
 /**
  * Extracts a clean URL from an input string (which may contain share text, comments, etc.)
- * and normalizes the protocol.
+ * and normalizes the protocol. Cloud-drive captions keep their extraction code.
  * @param {string} text - Raw input text or URL
  * @returns {string} Clean normalized URL
  */
 export function extractCleanUrl(text) {
   if (!text || typeof text !== "string") return "";
-  const match = text.match(/https?:\/\/[^\s]+/);
-  let clean = match ? match[0] : text.trim();
+  const share = parseShareText(text);
+  if (share) return share.url;
+
+  const first = firstHttpUrl(text);
+  let clean = first || text.trim();
 
   if (!clean) return "";
 
@@ -61,6 +66,10 @@ export function cleanUrl(url) {
       u.hostname.includes("youtube.com") ||
       u.hostname.includes("youtu.be")
     ) {
+      const shortsMatch = u.pathname.match(/\/shorts\/([^"&?/\s]{11})/i);
+      if (shortsMatch) {
+        return `https://www.youtube.com/watch?v=${shortsMatch[1]}`;
+      }
       if (u.hostname.includes("youtube.com") && u.searchParams.has("v")) {
         const v = u.searchParams.get("v");
         u.search = "";
@@ -73,6 +82,11 @@ export function cleanUrl(url) {
       u.hostname.includes("xhslink.cn")
     ) {
       // Keep xsec_token for Xiaohongshu / RedNote security validation
+    } else if (u.hostname.includes("bilibili.com") || u.hostname.includes("bilibili.tv")) {
+      // biar multi video ga fallback mulu ke 1 download
+      const part = u.searchParams.get("p");
+      u.search = "";
+      if (part) u.searchParams.set("p", part);
     } else if (
       u.hostname.includes("terabox") ||
       u.hostname.includes("1024tera") ||

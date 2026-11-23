@@ -1,11 +1,13 @@
-import { sanitizeTitle } from "../downloader/filename.js";
 // download.js — main download flow (analyze + batch download)
 import { translations, t } from "../i18n/index.js";
 import { convertImagesToPdf } from "../utils/pdfHelper.js";
+import { sanitizeTitle } from "../downloader/filename.js";
 import {
   Filesystem,
   showToast,
   cleanUrl,
+  parseShareText,
+  normalizeLooseUrl,
   handleScrapeError,
   checkWifiOnlyGuard,
   getNetworkStatus,
@@ -293,6 +295,12 @@ downloadBtn.addEventListener("click", async () => {
               statusEl.textContent = t("status-downloading");
             }
 
+            let itemFailed = false;
+            const batchDl = async (...args) => {
+              const res = await startNativeDownload(...args);
+              if (!res?.success) itemFailed = true;
+            };
+
             const downloadsList = item.data.result?.downloads || [];
             const itemTitle = decodeHtmlEntities(
               item.data.result?.title || "Media",
@@ -300,34 +308,42 @@ downloadBtn.addEventListener("click", async () => {
             const itemAuthor = item.data.result?.author || "";
 
             if (downloadsList.length > 0) {
-              const isVideoPost = downloadsList.some(
+              const batchFormat =
+                localStorage.getItem("mori_batch_format") || "video";
+
+              const photoItems = downloadsList.filter(
                 (d) =>
-                  /video/i.test(d.type) ||
-                  /\.mp4/i.test(d.url) ||
-                  d.type === "MP4" ||
-                  /\d+p/i.test(d.type),
+                  /photo|image/i.test(d.type) ||
+                  /\.(jpg|jpeg|png|webp)(\?|$)/i.test(d.url),
               );
 
-              if (isVideoPost) {
-                const primaryVideo = downloadsList[0];
-                if (batchDownloadCancelled) {
-                  if (statusEl) {
-                    statusEl.className = "batch-item-status cancelled";
-                    statusEl.textContent = t("status-cancelled");
-                  }
-                  return;
-                }
-                await startNativeDownload(
-                  primaryVideo.url,
-                  primaryVideo.type,
-                  itemTitle,
-                  null,
-                  item.url,
-                  false, // don't reset cancel flag
-                  itemAuthor,
+              const isAudioPost = downloadsList.every(
+                (d) =>
+                  /audio|mp3|m4a|wav|flac/i.test(d.type) ||
+                  /\.(mp3|m4a|wav|flac)(\?|$)/i.test(d.url),
+              );
+
+              const videoItems = downloadsList.filter(
+                (d) =>
+                  (/video/i.test(d.type) ||
+                    /\.mp4/i.test(d.url) ||
+                    d.type === "MP4" ||
+                    /\d+p/i.test(d.type)) &&
+                  !photoItems.includes(d),
+              );
+
+              const isResolutionTiers =
+                photoItems.length === 0 &&
+                downloadsList.length > 1 &&
+                downloadsList.some(
+                  (d) =>
+                    /\b\d{3,4}p\b/i.test(d.type) ||
+                    d.isMirror ||
+                    /^(hd|sd)$/i.test(d.type),
                 );
-              } else {
-                if (batchPhotoMode === "first") {
+
+              if (isAudioPost) {
+                for (let dIdx = 0; dIdx < downloadsList.length; dIdx++) {
                   if (batchDownloadCancelled) {
                     if (statusEl) {
                       statusEl.className = "batch-item-status cancelled";
@@ -335,78 +351,101 @@ downloadBtn.addEventListener("click", async () => {
                     }
                     return;
                   }
-                  const dlObj = downloadsList[0];
-                  await startNativeDownload(
-                    dlObj.url,
-                    dlObj.type,
-                    itemTitle,
+                  const audioItem = downloadsList[dIdx];
+                  const audioTitle =
+                    downloadsList.length > 1
+                      ? `${itemTitle}_${dIdx + 1}`
+                      : itemTitle;
+                  await batchDl(
+                    audioItem.url,
+                    audioItem.type,
+                    audioTitle,
                     null,
                     item.url,
                     false,
-                    itemAuthor,
+                    { headers: audioItem.headers, author: itemAuthor },
                   );
-                } else if (batchPhotoMode === "pdf") {
-                  const imageItems = downloadsList.filter(
-                    (d) =>
-                      /image|photo|jpg|png|webp/i.test(d.type) ||
-                      /\.(jpg|jpeg|png|webp)/i.test(d.url),
-                  );
-                  if (imageItems.length > 1) {
-                    try {
-                      const imageUrls = imageItems.map((img) => img.url);
-                      const pdfBuffer = await convertImagesToPdf(imageUrls);
+                }
+              } else if (isResolutionTiers) {
+                if (batchDownloadCancelled) {
+                  if (statusEl) {
+                    statusEl.className = "batch-item-status cancelled";
+                    statusEl.textContent = t("status-cancelled");
+                  }
+                  return;
+                }
 
-                      // Check cancel AFTER async PDF generation
-                      if (batchDownloadCancelled) {
-                        if (statusEl) {
-                          statusEl.className = "batch-item-status cancelled";
-                          statusEl.textContent = t("status-cancelled");
-                        }
-                        return;
-                      }
+                const targetMedia =
+                  batchFormat === "audio"
+                    ? (downloadsList.find(
+                        (d) =>
+                          /audio|mp3/i.test(d.type) ||
+                          /\.(mp3|m4a)(\?|$)/i.test(d.url),
+                      ) || downloadsList[0])
+                    : downloadsList[0];
 
-                      const sanitizedTitle = sanitizeTitle(
-                        itemTitle || "Mori_Batch_Album",
-                        "PDF",
-                        itemAuthor || "",
-                      );
-                      const pdfFileName = `${sanitizedTitle}.pdf`;
-                      if (
-                        window.Capacitor?.isNativePlatform?.() &&
-                        Filesystem
-                      ) {
-                        const base64Pdf = btoa(
-                          pdfBuffer.reduce(
-                            (acc, byte) => acc + String.fromCharCode(byte),
-                            "",
-                          ),
-                        );
-                        await Filesystem.writeFile({
-                          path: `Download/Mori/${pdfFileName}`,
-                          directory: "EXTERNAL_STORAGE",
-                          data: base64Pdf,
-                          recursive: true,
-                        }).catch(() =>
-                          Filesystem.writeFile({
-                            path: `Download/Mori/${pdfFileName}`,
-                            directory: "DOCUMENTS",
-                            data: base64Pdf,
-                            recursive: true,
-                          }),
-                        );
-                      } else {
-                        const blob = new Blob([pdfBuffer], {
-                          type: "application/pdf",
-                        });
-                        const a = document.createElement("a");
-                        a.href = URL.createObjectURL(blob);
-                        a.download = pdfFileName;
-                        a.click();
-                        URL.revokeObjectURL(a.href);
+                await batchDl(
+                  targetMedia.url,
+                  targetMedia.type,
+                  itemTitle,
+                  null,
+                  item.url,
+                  false,
+                  { headers: targetMedia.headers, author: itemAuthor },
+                );
+              } else {
+                // Carousel / Multi-item post: download video items + photo items
+                if (videoItems.length > 0) {
+                  for (let vIdx = 0; vIdx < videoItems.length; vIdx++) {
+                    if (batchDownloadCancelled) {
+                      if (statusEl) {
+                        statusEl.className = "batch-item-status cancelled";
+                        statusEl.textContent = t("status-cancelled");
                       }
-                    } catch (pdfErr) {
-                      console.warn("PDF generation failed, fallback:", pdfErr);
-                      for (let dIdx = 0; dIdx < downloadsList.length; dIdx++) {
+                      return;
+                    }
+                    const vObj = videoItems[vIdx];
+                    const vTitle =
+                      videoItems.length > 1 || photoItems.length > 0
+                        ? `${itemTitle}_video_${vIdx + 1}`
+                        : itemTitle;
+                    await batchDl(
+                      vObj.url,
+                      vObj.type || "MP4",
+                      vTitle,
+                      null,
+                      item.url,
+                      false,
+                      { headers: vObj.headers, author: itemAuthor },
+                    );
+                  }
+                }
+
+                if (photoItems.length > 0) {
+                  if (batchPhotoMode === "first") {
+                    if (batchDownloadCancelled) {
+                      if (statusEl) {
+                        statusEl.className = "batch-item-status cancelled";
+                        statusEl.textContent = t("status-cancelled");
+                      }
+                      return;
+                    }
+                    const dlObj = photoItems[0];
+                    await batchDl(
+                      dlObj.url,
+                      dlObj.type || "PHOTO",
+                      itemTitle,
+                      null,
+                      item.url,
+                      false,
+                      { headers: dlObj.headers, author: itemAuthor },
+                    );
+                  } else if (batchPhotoMode === "pdf") {
+                    if (photoItems.length > 1) {
+                      try {
+                        const imageUrls = photoItems.map((img) => img.url);
+                        const pdfBuffer = await convertImagesToPdf(imageUrls);
+
                         if (batchDownloadCancelled) {
                           if (statusEl) {
                             statusEl.className = "batch-item-status cancelled";
@@ -414,65 +453,152 @@ downloadBtn.addEventListener("click", async () => {
                           }
                           return;
                         }
-                        const dlObj = downloadsList[dIdx];
-                        const titleWithIdx =
-                          downloadsList.length > 1
-                            ? `${itemTitle}_${dIdx + 1}`
-                            : itemTitle;
-                        await startNativeDownload(
-                          dlObj.url,
-                          dlObj.type,
-                          titleWithIdx,
-                          null,
-                          item.url,
-                          false,
-                          itemAuthor,
+
+                        const sanitizedTitle = sanitizeTitle(
+                          itemTitle || "Mori_Batch_Album",
+                          "PDF",
+                          itemAuthor || "",
                         );
+                        const pdfFileName = `${sanitizedTitle}.pdf`;
+                        let savedPdfPath = `Download/Mori/${pdfFileName}`;
+                        let pdfDir = "EXTERNAL_STORAGE";
+                        if (
+                          window.Capacitor?.isNativePlatform?.() &&
+                          Filesystem
+                        ) {
+                          const base64Pdf = btoa(
+                            pdfBuffer.reduce(
+                              (acc, byte) => acc + String.fromCharCode(byte),
+                              "",
+                            ),
+                          );
+                          try {
+                            await Filesystem.writeFile({
+                              path: savedPdfPath,
+                              directory: "EXTERNAL_STORAGE",
+                              data: base64Pdf,
+                              recursive: true,
+                            });
+                            pdfDir = "EXTERNAL_STORAGE";
+                          } catch (_) {
+                            await Filesystem.writeFile({
+                              path: savedPdfPath,
+                              directory: "DOCUMENTS",
+                              data: base64Pdf,
+                              recursive: true,
+                            });
+                            pdfDir = "DOCUMENTS";
+                          }
+
+                          let scanPdfTarget = savedPdfPath;
+                          try {
+                            const uriObj = await Filesystem.getUri({
+                              path: savedPdfPath,
+                              directory: pdfDir,
+                            });
+                            if (uriObj?.uri) scanPdfTarget = uriObj.uri;
+                          } catch (_) {}
+
+                          if (window.MoriMainBridge?.scanMediaFile) {
+                            try {
+                              window.MoriMainBridge.scanMediaFile(scanPdfTarget);
+                            } catch (_) {}
+                          }
+                        } else {
+                          const blob = new Blob([pdfBuffer], {
+                            type: "application/pdf",
+                          });
+                          const a = document.createElement("a");
+                          a.href = URL.createObjectURL(blob);
+                          a.download = pdfFileName;
+                          a.click();
+                          savedPdfPath = pdfFileName;
+                          URL.revokeObjectURL(a.href);
+                        }
+
+                        window.dispatchEvent(
+                          new CustomEvent("mori_file_saved", {
+                            detail: {
+                              url: item.url,
+                              sourceUrl: item.url,
+                              path: savedPdfPath,
+                              uri: savedPdfPath,
+                              title: `${sanitizedTitle} (PDF)`,
+                              thumbnail: item.data?.result?.thumbnail || null,
+                              type: "PDF",
+                            },
+                          }),
+                        );
+                      } catch (pdfErr) {
+                        console.warn("PDF generation failed, fallback:", pdfErr);
+                        for (let dIdx = 0; dIdx < photoItems.length; dIdx++) {
+                          if (batchDownloadCancelled) {
+                            if (statusEl) {
+                              statusEl.className = "batch-item-status cancelled";
+                              statusEl.textContent = t("status-cancelled");
+                            }
+                            return;
+                          }
+                          const dlObj = photoItems[dIdx];
+                          const titleWithIdx =
+                            photoItems.length > 1
+                              ? `${itemTitle}_${dIdx + 1}`
+                              : itemTitle;
+                          await batchDl(
+                            dlObj.url,
+                            dlObj.type || "PHOTO",
+                            titleWithIdx,
+                            null,
+                            item.url,
+                            false,
+                            { headers: dlObj.headers, author: itemAuthor },
+                          );
+                        }
                       }
+                    } else {
+                      if (batchDownloadCancelled) {
+                        if (statusEl) {
+                          statusEl.className = "batch-item-status cancelled";
+                          statusEl.textContent = t("status-cancelled");
+                        }
+                        return;
+                      }
+                      const dlObj = photoItems[0];
+                      await batchDl(
+                        dlObj.url,
+                        dlObj.type || "PHOTO",
+                        itemTitle,
+                        null,
+                        item.url,
+                        false,
+                        { headers: dlObj.headers, author: itemAuthor },
+                      );
                     }
                   } else {
-                    if (batchDownloadCancelled) {
-                      if (statusEl) {
-                        statusEl.className = "batch-item-status cancelled";
-                        statusEl.textContent = t("status-cancelled");
+                    // "all": download all carousel photos
+                    for (let dIdx = 0; dIdx < photoItems.length; dIdx++) {
+                      if (batchDownloadCancelled) {
+                        if (statusEl) {
+                          statusEl.className = "batch-item-status cancelled";
+                          statusEl.textContent = t("status-cancelled");
+                        }
+                        return;
                       }
-                      return;
+                      const dlObj = photoItems[dIdx];
+                      const titleWithIdx =
+                        photoItems.length > 1
+                          ? `${itemTitle}_${dIdx + 1}`
+                          : itemTitle;
+                      await batchDl(
+                        dlObj.url,
+                        dlObj.type || "PHOTO",
+                        titleWithIdx,
+                        null,
+                        item.url,
+                        false,
+                        { headers: dlObj.headers, author: itemAuthor },
+                      );
                     }
-                    const dlObj = downloadsList[0];
-                    await startNativeDownload(
-                      dlObj.url,
-                      dlObj.type,
-                      itemTitle,
-                      null,
-                      item.url,
-                      false,
-                      itemAuthor,
-                    );
-                  }
-                } else {
-                  // "all": download all carousel photos — check cancel between each photo
-                  for (let dIdx = 0; dIdx < downloadsList.length; dIdx++) {
-                    if (batchDownloadCancelled) {
-                      if (statusEl) {
-                        statusEl.className = "batch-item-status cancelled";
-                        statusEl.textContent = t("status-cancelled");
-                      }
-                      return;
-                    }
-                    const dlObj = downloadsList[dIdx];
-                    const titleWithIdx =
-                      downloadsList.length > 1
-                        ? `${itemTitle}_${dIdx + 1}`
-                        : itemTitle;
-                    await startNativeDownload(
-                      dlObj.url,
-                      dlObj.type,
-                      titleWithIdx,
-                      null,
-                      item.url,
-                      false,
-                      itemAuthor,
-                    );
                   }
                 }
               }
@@ -483,6 +609,9 @@ downloadBtn.addEventListener("click", async () => {
                 statusEl.className = "batch-item-status cancelled";
                 statusEl.textContent = t("status-cancelled");
               }
+            } else if (statusEl && itemFailed) {
+              statusEl.className = "batch-item-status error";
+              statusEl.textContent = t("status-failed");
             } else if (statusEl) {
               statusEl.className = "batch-item-status completed";
               statusEl.textContent = t("status-saved");
@@ -533,9 +662,30 @@ downloadBtn.addEventListener("click", async () => {
     return;
   }
 
-  const url = urlInput.value.trim();
+  const rawUrl = urlInput.value.trim();
 
-  if (!url) return;
+  if (!rawUrl) return;
+
+  const share = parseShareText(rawUrl);
+  const normalized = share?.url || normalizeLooseUrl(rawUrl);
+  const url = normalized || rawUrl;
+  if (normalized && normalized !== rawUrl) {
+    urlInput.value = url;
+    urlInput.dispatchEvent(new Event("input"));
+  }
+
+  if (share) {
+    const code = share.password
+      ? t("toast-share-code", { code: share.password })
+      : "";
+    showToast(
+      t("toast-share-kept", {
+        platform: t(`share-platform-${share.platform}`),
+        code,
+      }),
+    );
+    return;
+  }
 
   if (!(await enforceNetworkGuards())) return;
 
@@ -662,6 +812,10 @@ downloadBtn.addEventListener("click", async () => {
       );
       const isPlaylist =
         !!playlistMatch?.[1] && (!videoMatch?.[1] || url.includes("/playlist"));
+      const targetYouTubeUrl =
+        !isPlaylist && videoMatch?.[1]
+          ? `https://www.youtube.com/watch?v=${videoMatch[1]}`
+          : url;
       if (isPlaylist) {
         setYouTubeSource("gg");
       } else {
@@ -669,7 +823,7 @@ downloadBtn.addEventListener("click", async () => {
         else if (preferServer === "server2") setYouTubeSource("mobi");
         else setYouTubeSource(null);
       }
-      data = await scrapeYouTube(url);
+      data = await scrapeYouTube(targetYouTubeUrl);
       if (data && data.requireSource) {
         confirmTitle.textContent =
           translations[currentLang]["label-choose-server"] || "Choose Server";
@@ -702,7 +856,7 @@ downloadBtn.addEventListener("click", async () => {
           };
         });
         setYouTubeSource(chosen);
-        data = await scrapeYouTube(url);
+        data = await scrapeYouTube(targetYouTubeUrl);
       }
     } else if (
       url.includes("twitter.com") ||

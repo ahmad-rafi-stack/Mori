@@ -51,6 +51,7 @@ import {
   guideToSettingsBtn,
   settingsMainMenu,
   settingsSubPages,
+  openExternalUrl,
 } from "./modules/core.js";
 
 // imports for side effects (settings UI, history, modals, update, intents, download)
@@ -63,10 +64,21 @@ import "./modules/download.js";
 import "./ui/downloadBubble.js";
 import { initBgAnimation } from "./modules/bgAnimation.js";
 import { refreshGalleryPage } from "./modules/gallery.js";
-import { applyGalleryVisibility } from "./modules/settings/appearance.js";
+import {
+  applyGalleryVisibility,
+  applyToolsVisibility,
+} from "./modules/settings/appearance.js";
+import {
+  initTools,
+  isInsideToolSubView,
+  closeCurrentToolSubView,
+  clearToolsTempCache,
+} from "./modules/tools/index.js";
 
 initBgAnimation();
 applyGalleryVisibility();
+applyToolsVisibility();
+initTools();
 
 // Batch Mode Toggle
 if (batchToggleBtn) {
@@ -125,6 +137,10 @@ guideToSettingsBtn?.addEventListener("click", () => {
   }
   guideOverlay?.classList.add("hidden");
   switchPage("settings");
+});
+
+document.getElementById("guideWaChannelBtn")?.addEventListener("click", () => {
+  openExternalUrl("https://whatsapp.com/channel/0029VbDXoqs6mYPSVp4UcT2A");
 });
 
 if (document.readyState === "loading") {
@@ -194,10 +210,15 @@ window.addEventListener("mori_download_started", refreshHistoryIfVisible);
 window.addEventListener("mori_download_ended", refreshHistoryIfVisible);
 window.addEventListener("mori_download_cancelled", refreshHistoryIfVisible);
 
-const pages = ["home", "gallery", "history", "settings"];
+const pages = ["home", "gallery", "tools", "history", "settings"];
 
 async function switchPage(pageId) {
   if (pageId === "gallery" && localStorage.getItem("mori_show_gallery") === "false") {
+    switchPage("home");
+    return;
+  }
+
+  if (pageId === "tools" && localStorage.getItem("mori_show_tools") === "false") {
     switchPage("home");
     return;
   }
@@ -286,13 +307,28 @@ async function switchPage(pageId) {
     } else {
       renderHistory(onHistoryItemClick, onHistoryDeleteClick);
     }
-    setTimeout(refreshAllVideoThumbnails, 3000);
   }
 
   if (pageId === "gallery") {
     refreshGalleryPage();
   }
+
+  if (pageId === "tools") {
+    if (!isInsideToolSubView()) {
+      closeCurrentToolSubView();
+    }
+  } else if (localStorage.getItem("mori_tools_auto_clean") !== "false") {
+    clearToolsTempCache();
+  }
 }
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") {
+    if (localStorage.getItem("mori_tools_auto_clean") !== "false") {
+      clearToolsTempCache();
+    }
+  }
+});
 
 setTimeout(refreshAllVideoThumbnails, 5000);
 
@@ -352,9 +388,11 @@ document.addEventListener(
     if (!activeNavItem) return;
 
     const isGalleryOn = localStorage.getItem("mori_show_gallery") !== "false";
-    const activePages = isGalleryOn
-      ? ["home", "gallery", "history", "settings"]
-      : ["home", "history", "settings"];
+    const isToolsOn = localStorage.getItem("mori_show_tools") !== "false";
+    const activePages = ["home"];
+    if (isGalleryOn) activePages.push("gallery");
+    if (isToolsOn) activePages.push("tools");
+    activePages.push("history", "settings");
 
     const currentPage = activeNavItem.getAttribute("data-page");
     const currentIndex = activePages.indexOf(currentPage);
@@ -424,6 +462,11 @@ if (
       }
       activeSubPage.classList.add("hidden");
       document.getElementById("settingsMainMenu")?.classList.remove("hidden");
+      return;
+    }
+
+    if (isInsideToolSubView()) {
+      closeCurrentToolSubView();
       return;
     }
 

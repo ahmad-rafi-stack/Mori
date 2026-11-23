@@ -8,9 +8,6 @@ import { scraperFetch } from "./httpHelper.js";
 
 export * from "./httpHelper.js";
 
-export const BUNDLED_SCRAPER_VERSION = 6;
-window.__MORI_BUNDLED_SCRAPER_VERSION__ = BUNDLED_SCRAPER_VERSION;
-
 // Expose deps to the bundled IIFE core
 window.__moriDeps = { utils, urlUtils, core };
 
@@ -21,6 +18,151 @@ let _selectedTwitterSource = null;
 const _fxTwitterCache = new Map();
 const FX_CACHE_TTL_MS = 30000;
 
+const GENERIC_AUTHORS = new Set([
+  "unknown",
+  "tiktok user",
+  "douyin user",
+  "rednote creator",
+  "bilibili creator",
+  "facebook media",
+  "creator",
+  "user",
+]);
+
+function isGenericAuthor(val) {
+  const clean = String(val || "")
+    .trim()
+    .replace(/^@+/, "")
+    .toLowerCase();
+  return !clean || GENERIC_AUTHORS.has(clean);
+}
+
+function extractAuthorFromUrl(url, platform) {
+  if (!url || typeof url !== "string") return "";
+  if (platform === "twitter") {
+    const m = url.match(
+      /(?:twitter\.com|x\.com|fxtwitter\.com|vxtwitter\.com|fixupx\.com)\/([a-z0-9_]{1,30})\/status/i,
+    );
+    if (m?.[1] && !["i", "web", "intent"].includes(m[1].toLowerCase())) {
+      return `@${m[1]}`;
+    }
+  } else if (platform === "tiktok") {
+    const m = url.match(/tiktok\.com\/@([a-z0-9._-]+)/i);
+    if (m?.[1]) return `@${m[1]}`;
+  } else if (platform === "instagram") {
+    const m = url.match(
+      /instagram\.com\/([a-z0-9._]{1,40})\/(?:p|reel|reels|tv)\//i,
+    );
+    if (
+      m?.[1] &&
+      ![
+        "p",
+        "reel",
+        "reels",
+        "tv",
+        "stories",
+        "share",
+        "explore",
+        "accounts",
+      ].includes(m[1].toLowerCase())
+    ) {
+      return `@${m[1]}`;
+    }
+  } else if (platform === "threads") {
+    const m = url.match(/threads\.(?:net|com)\/@([a-z0-9._]+)/i);
+    if (m?.[1]) return `@${m[1]}`;
+  } else if (platform === "facebook") {
+    const m = url.match(
+      /facebook\.com\/([a-z0-9.]{2,50})\/(?:posts|videos|reel|photos)\//i,
+    );
+    if (
+      m?.[1] &&
+      ![
+        "share",
+        "watch",
+        "reel",
+        "reels",
+        "groups",
+        "events",
+        "story.php",
+        "permalink.php",
+        "profile.php",
+        "photo.php",
+      ].includes(m[1].toLowerCase())
+    ) {
+      return m[1];
+    }
+  } else if (platform === "reddit") {
+    const m = url.match(/reddit\.com\/(r|u|user)\/([a-z0-9_-]+)/i);
+    if (m?.[1] && m?.[2]) {
+      const prefix = m[1].toLowerCase() === "r" ? "r" : "u";
+      return `${prefix}/${m[2]}`;
+    }
+  }
+  return "";
+}
+
+async function fetchYouTubeOEmbedAuthor(url) {
+  if (!url || typeof url !== "string") return "";
+  try {
+    const oeRes = await scraperFetch(
+      {
+        url: `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`,
+        rawResponse: true,
+      },
+      "YouTube oEmbed",
+    );
+    let oeData = oeRes?.data ?? oeRes;
+    if (typeof oeData === "string") {
+      try {
+        oeData = JSON.parse(oeData);
+      } catch (_) {
+        oeData = null;
+      }
+    }
+    if (oeData && typeof oeData === "object") {
+      const handleMatch = String(oeData.author_url || "").match(
+        /\/@([^/?#]+)/,
+      );
+      if (handleMatch?.[1]) return `@${handleMatch[1]}`;
+      if (oeData.author_name) return String(oeData.author_name).trim();
+    }
+  } catch (_) {}
+  return "";
+}
+
+async function enrichScrapeAuthor(res, url, platform) {
+  if (!res?.status || !res?.result) return res;
+  if (!isGenericAuthor(res.result.author)) return res;
+
+  let derived = extractAuthorFromUrl(res.result.sourceUrl || url, platform);
+
+  if (
+    !derived &&
+    (platform === "spotify" ||
+      platform === "applemusic" ||
+      platform === "bandcamp")
+  ) {
+    const title = String(res.result.title || "");
+    const sepIdx = title.indexOf(" - ");
+    if (sepIdx > 0) {
+      const candidate = title.slice(0, sepIdx).trim();
+      if (candidate && !isGenericAuthor(candidate)) {
+        derived = candidate;
+      }
+    }
+  }
+
+  if (!derived && platform === "youtube") {
+    derived = await fetchYouTubeOEmbedAuthor(res.result.sourceUrl || url);
+  }
+
+  if (derived && !isGenericAuthor(derived)) {
+    res.result.author = derived;
+  }
+  return res;
+}
+
 function rememberScrapeResult(res) {
   if (res?.status && res?.result && typeof window !== "undefined") {
     window.__moriLastScrapeResult = res.result;
@@ -28,13 +170,13 @@ function rememberScrapeResult(res) {
   return res;
 }
 
-function extractTweetId(url) {
+export function extractTweetId(url) {
   if (!url || typeof url !== "string") return null;
   const match = url.match(/status(?:es)?\/(\d+)/i);
   return match ? match[1] : null;
 }
 
-function toTwitterOrigImageUrl(rawUrl) {
+export function toTwitterOrigImageUrl(rawUrl) {
   if (!rawUrl || typeof rawUrl !== "string") return rawUrl;
   if (rawUrl.includes("pbs.twimg.com")) {
     try {
@@ -84,15 +226,16 @@ async function fetchFxTwitterTweet(tweetId) {
   }
 }
 
-function buildFxTwitterPayload(tweet, originalUrl, tweetId) {
+export function buildFxTwitterPayload(tweet, originalUrl, tweetId) {
   if (!tweet) return null;
   const mediaObj = tweet.media || tweet.quote?.media || null;
-  const rawList = Array.isArray(mediaObj?.all) && mediaObj.all.length > 0
-    ? mediaObj.all
-    : [
-        ...(Array.isArray(mediaObj?.photos) ? mediaObj.photos : []),
-        ...(Array.isArray(mediaObj?.videos) ? mediaObj.videos : []),
-      ];
+  const rawList =
+    Array.isArray(mediaObj?.all) && mediaObj.all.length > 0
+      ? mediaObj.all
+      : [
+          ...(Array.isArray(mediaObj?.photos) ? mediaObj.photos : []),
+          ...(Array.isArray(mediaObj?.videos) ? mediaObj.videos : []),
+        ];
 
   if (rawList.length === 0) return null;
 
@@ -244,28 +387,8 @@ async function fetchBundleText() {
 async function loadCoreScrapers() {
   if (_corePromise) return _corePromise;
   _corePromise = (async () => {
-    let scriptText = null;
-    let isFromOtaPatch = false;
-
-    // A. OTA patch from localStorage (plain JS text)
     try {
-      const patchedText = localStorage.getItem("mori_patched_scraper_bin");
-      const activeVer = parseInt(localStorage.getItem("mori_active_scraper_version") || "0", 10);
-      if (patchedText && activeVer >= BUNDLED_SCRAPER_VERSION) {
-        scriptText = patchedText;
-        isFromOtaPatch = true;
-        console.log(`[Mori] Loaded OTA patched scraper core v${activeVer}`);
-      }
-    } catch (otaErr) {
-      console.warn("[Mori] OTA patch load warning:", otaErr);
-    }
-
-    try {
-      // B. Fallback to bundled bundle.js
-      if (!scriptText) {
-        scriptText = await fetchBundleText();
-      }
-
+      const scriptText = await fetchBundleText();
       const fn = new Function(
         scriptText +
           "\nreturn typeof __MoriCoreScrapers !== 'undefined' ? __MoriCoreScrapers : (typeof window !== 'undefined' ? window.__MoriCoreScrapers : null);"
@@ -275,35 +398,34 @@ async function loadCoreScrapers() {
       if (!mod) throw new Error("[Mori] Failed to instantiate core scraper modules.");
 
       window.__MoriCoreScrapers = mod;
-      console.log(`[Mori] Core scrapers ready (${isFromOtaPatch ? "OTA Patch" : "Bundled"} v${BUNDLED_SCRAPER_VERSION}).`);
       return mod;
     } catch (e) {
-      // Safe-mode: corrupted OTA patch → clear and retry with bundled
-      if (isFromOtaPatch) {
-        console.warn("[Mori] Corrupted OTA patch — resetting to bundled core.", e);
-        localStorage.removeItem("mori_patched_scraper_bin");
-        localStorage.removeItem("mori_active_scraper_version");
-        _corePromise = null;
-        return loadCoreScrapers();
-      }
       console.error("[Mori] Fatal init error:", e);
       if (typeof window.showFatalErrorModal === "function") {
         window.showFatalErrorModal(e.message || String(e));
       }
-      _corePromise = null;
       throw e;
     }
   })();
   return _corePromise;
 }
 
-export async function scrapeTikTok(...args) { return rememberScrapeResult(await (await loadCoreScrapers()).scrapeTikTok(...args)); }
+export async function scrapeTikTok(url, ...rest) {
+  const res = await (await loadCoreScrapers()).scrapeTikTok(url, ...rest);
+  return rememberScrapeResult(await enrichScrapeAuthor(res, url, "tiktok"));
+}
 export function setTikTokSource(...args) { loadCoreScrapers().then((m) => m.setTikTokSource(...args)); }
 
-export async function scrapeYouTube(...args) { return rememberScrapeResult(await (await loadCoreScrapers()).scrapeYouTube(...args)); }
+export async function scrapeYouTube(url, ...rest) {
+  const res = await (await loadCoreScrapers()).scrapeYouTube(url, ...rest);
+  return rememberScrapeResult(await enrichScrapeAuthor(res, url, "youtube"));
+}
 export function setYouTubeSource(...args) { loadCoreScrapers().then((m) => m.setYouTubeSource(...args)); }
 
-export async function scrapeInstagram(...args) { return rememberScrapeResult(await (await loadCoreScrapers()).scrapeInstagram(...args)); }
+export async function scrapeInstagram(url, ...rest) {
+  const res = await (await loadCoreScrapers()).scrapeInstagram(url, ...rest);
+  return rememberScrapeResult(await enrichScrapeAuthor(res, url, "instagram"));
+}
 export function setInstagramSource(...args) { loadCoreScrapers().then((m) => m.setInstagramSource(...args)); }
 
 export function setTwitterSource(source, ...rest) {
@@ -381,7 +503,7 @@ export async function scrapeTwitter(url, ...rest) {
         }
       }
     }
-    return rememberScrapeResult(res);
+    return rememberScrapeResult(await enrichScrapeAuthor(res, url, "twitter"));
   }
 
   // Fallback to FxTwitter Direct when TVD/SaveTWT fail on videos/GIFs.
@@ -396,12 +518,24 @@ export async function scrapeTwitter(url, ...rest) {
   return res;
 }
 
-export async function scrapeSpotify(...args) { return rememberScrapeResult(await (await loadCoreScrapers()).scrapeSpotify(...args)); }
+export async function scrapeSpotify(url, ...rest) {
+  const res = await (await loadCoreScrapers()).scrapeSpotify(url, ...rest);
+  return rememberScrapeResult(await enrichScrapeAuthor(res, url, "spotify"));
+}
 export function setSpotifySource(...args) { loadCoreScrapers().then((m) => m.setSpotifySource(...args)); }
 
-export async function scrapeBilibili(...args) { return rememberScrapeResult(await (await loadCoreScrapers()).scrapeBilibili(...args)); }
-export async function scrapePixiv(...args) { return rememberScrapeResult(await (await loadCoreScrapers()).scrapePixiv(...args)); }
-export async function scrapeRedNote(...args) { return rememberScrapeResult(await (await loadCoreScrapers()).scrapeRedNote(...args)); }
+export async function scrapeBilibili(url, ...rest) {
+  const res = await (await loadCoreScrapers()).scrapeBilibili(url, ...rest);
+  return rememberScrapeResult(await enrichScrapeAuthor(res, url, "bilibili"));
+}
+export async function scrapePixiv(url, ...rest) {
+  const res = await (await loadCoreScrapers()).scrapePixiv(url, ...rest);
+  return rememberScrapeResult(await enrichScrapeAuthor(res, url, "pixiv"));
+}
+export async function scrapeRedNote(url, ...rest) {
+  const res = await (await loadCoreScrapers()).scrapeRedNote(url, ...rest);
+  return rememberScrapeResult(await enrichScrapeAuthor(res, url, "rednote"));
+}
 
 export async function scrapeDouyin(url, ...rest) {
   const originalUrl = url;
@@ -454,13 +588,34 @@ export async function scrapeDouyin(url, ...rest) {
     if (res.data) res.data.sourceUrl = originalUrl;
     res.sourceUrl = originalUrl;
   }
-  return rememberScrapeResult(res);
+  return rememberScrapeResult(await enrichScrapeAuthor(res, originalUrl, "douyin"));
 }
 
-export async function scrapeThreads(...args) { return rememberScrapeResult(await (await loadCoreScrapers()).scrapeThreads(...args)); }
-export async function scrapePinterest(...args) { return rememberScrapeResult(await (await loadCoreScrapers()).scrapePinterest(...args)); }
-export async function scrapeAppleMusic(...args) { return rememberScrapeResult(await (await loadCoreScrapers()).scrapeAppleMusic(...args)); }
-export async function scrapeFacebook(...args) { return rememberScrapeResult(await (await loadCoreScrapers()).scrapeFacebook(...args)); }
-export async function scrapeBandcamp(...args) { return rememberScrapeResult(await (await loadCoreScrapers()).scrapeBandcamp(...args)); }
-export async function scrapeReddit(...args) { return rememberScrapeResult(await (await loadCoreScrapers()).scrapeReddit(...args)); }
-export async function scrapeTeraBox(...args) { return rememberScrapeResult(await (await loadCoreScrapers()).scrapeTeraBox(...args)); }
+export async function scrapeThreads(url, ...rest) {
+  const res = await (await loadCoreScrapers()).scrapeThreads(url, ...rest);
+  return rememberScrapeResult(await enrichScrapeAuthor(res, url, "threads"));
+}
+export async function scrapePinterest(url, ...rest) {
+  const res = await (await loadCoreScrapers()).scrapePinterest(url, ...rest);
+  return rememberScrapeResult(await enrichScrapeAuthor(res, url, "pinterest"));
+}
+export async function scrapeAppleMusic(url, ...rest) {
+  const res = await (await loadCoreScrapers()).scrapeAppleMusic(url, ...rest);
+  return rememberScrapeResult(await enrichScrapeAuthor(res, url, "applemusic"));
+}
+export async function scrapeFacebook(url, ...rest) {
+  const res = await (await loadCoreScrapers()).scrapeFacebook(url, ...rest);
+  return rememberScrapeResult(await enrichScrapeAuthor(res, url, "facebook"));
+}
+export async function scrapeBandcamp(url, ...rest) {
+  const res = await (await loadCoreScrapers()).scrapeBandcamp(url, ...rest);
+  return rememberScrapeResult(await enrichScrapeAuthor(res, url, "bandcamp"));
+}
+export async function scrapeReddit(url, ...rest) {
+  const res = await (await loadCoreScrapers()).scrapeReddit(url, ...rest);
+  return rememberScrapeResult(await enrichScrapeAuthor(res, url, "reddit"));
+}
+export async function scrapeTeraBox(url, ...rest) {
+  const res = await (await loadCoreScrapers()).scrapeTeraBox(url, ...rest);
+  return rememberScrapeResult(await enrichScrapeAuthor(res, url, "terabox"));
+}

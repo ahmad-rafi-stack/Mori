@@ -30,7 +30,7 @@ export function createVideoPlayer(dl, index, resultThumbnail) {
     videoUrl.startsWith("file://") ||
     videoUrl.startsWith("content://") ||
     videoUrl.startsWith("asset://") ||
-        videoUrl.includes("localhost") ||
+    videoUrl.includes("localhost") ||
     videoUrl.includes("127.0.0.1");
   const isDouyin = /douyin|snssdk/i.test(videoUrl);
 
@@ -56,6 +56,7 @@ export function createVideoPlayer(dl, index, resultThumbnail) {
     fileNameLower.endsWith(".opus") ||
     fileNameLower.endsWith(".flac") ||
     fileNameLower.endsWith(".wav");
+
 
   if (isAudioOnly) {
     playerContainer.classList.add("is-audio");
@@ -108,7 +109,6 @@ export function createVideoPlayer(dl, index, resultThumbnail) {
     playerContainer.classList.remove("mori-loading");
     removeFallbackImg();
   };
-
   let userPaused = false;
   let unmuteIcon = null;
   let muteIcon = null;
@@ -270,7 +270,6 @@ export function createVideoPlayer(dl, index, resultThumbnail) {
           removeLoading();
           tryAutoPlay();
         });
-
     } else {
       video.src = videoUrl;
       tryAutoPlay();
@@ -376,6 +375,7 @@ export function createVideoPlayer(dl, index, resultThumbnail) {
             ? "audio/mp4"
             : "audio/mpeg"
           : "video/mp4";
+
 
         if (Filesystem) {
           const rawTarget = dl.rawPath || cleanPath;

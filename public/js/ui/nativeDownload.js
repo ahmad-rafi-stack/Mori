@@ -57,7 +57,7 @@ export async function startNativeDownload(
   btn,
   sourceUrl,
   resetCancelFlag = true,
-  author = "",
+  meta = {},
 ) {
   if (!url || typeof url !== "string" || !url.trim()) {
     showToast(
@@ -80,12 +80,36 @@ export async function startNativeDownload(
     return { success: true, skipped: true };
   }
 
-  const tauriInvoke =
-    window.__TAURI__?.core?.invoke ||
-    window.__TAURI_INTERNALS__?.invoke ||
-    window.__TAURI__?.invoke;
+  const author = typeof meta === "string" ? meta : meta?.author || "";
 
-  if (!Filesystem && !tauriInvoke) {
+  if (!Filesystem) {
+    try {
+      if (!url.startsWith("blob:") && !url.startsWith("data:")) {
+        const blobRes = await fetch(url).catch(() => null);
+        if (blobRes && blobRes.ok) {
+          const blobData = await blobRes.blob();
+          const blobUrl = URL.createObjectURL(blobData);
+          const ext = resolveExtension(type, url);
+          const sanitizedTitle = sanitizeTitle(title, type, author);
+          const fileName = generateFileName(
+            sanitizedTitle,
+            ext,
+            sourceUrl,
+            url,
+            type,
+            author,
+          );
+          const a = document.createElement("a");
+          a.href = blobUrl;
+          a.download = fileName;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          setTimeout(() => URL.revokeObjectURL(blobUrl), 10000);
+          return { success: true };
+        }
+      }
+    } catch (_) {}
     try {
       const a = document.createElement("a");
       a.href = url;
@@ -134,7 +158,13 @@ export async function startNativeDownload(
     if (src.includes("tiktok")) return "TikTok";
     if (src.includes("instagram")) return "Instagram";
     if (src.includes("youtube")) return "YouTube";
-    if (src.includes("twitter") || /(?:^|[/.])x\.com(?:[/?#:]|$)/i.test(src))
+    if (
+      src.includes("twitter") ||
+      /(?:^|[/.])x\.com(?:[/?#:]|$)/i.test(src) ||
+      src.includes("fxtwitter.com") ||
+      src.includes("vxtwitter.com") ||
+      src.includes("fixupx.com")
+    )
       return "Twitter";
     if (src.includes("facebook")) return "Facebook";
     if (src.includes("pinterest")) return "Pinterest";
@@ -176,6 +206,8 @@ export async function startNativeDownload(
   let effectiveTitle = title || "Mori Media";
   const dlId = `dl_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
   let itemCancelled = false;
+  let progressListener = null;
+  let progressUrl = url;
 
   downloadBubble.addDownload({
     id: dlId,
@@ -188,7 +220,7 @@ export async function startNativeDownload(
   });
 
   let currentProgressVal = 0;
-  const updateProgress = (pct, statusText) => {
+  const updateProgress = (pct, statusText, badgeText = null) => {
     if (hideProgress) return;
     if (typeof pct === "number" && !isNaN(pct)) {
       const maxCap = pct >= 100 ? 100 : 99;
@@ -199,11 +231,22 @@ export async function startNativeDownload(
       currentProgressVal = targetPct;
     }
     if (progressBar) progressBar.style.width = `${currentProgressVal}%`;
-    downloadBubble.updateProgress(dlId, currentProgressVal, statusText);
+    downloadBubble.updateProgress(
+      dlId,
+      currentProgressVal,
+      statusText,
+      badgeText,
+    );
     if (btn) {
       const b = btn.querySelector(".dl-badge");
       if (b) {
-        b.textContent = currentProgressVal >= 100 ? "SAVED" : `${currentProgressVal}%`;
+        if (currentProgressVal >= 100) {
+          b.textContent = t("status-saved");
+        } else if (badgeText) {
+          b.textContent = badgeText;
+        } else {
+          b.textContent = `${currentProgressVal}%`;
+        }
       }
     }
   };
@@ -242,48 +285,16 @@ export async function startNativeDownload(
     let currentSpeedBps = 0;
     let realProgressReceived = false;
 
-    // Fallback simulation timer while connecting or waiting for initial stream data
-    let simProgress = 0;
-    window._moriActiveSimInterval = setInterval(() => {
-      if (realProgressReceived) {
-        if (window._moriActiveSimInterval) {
-          clearInterval(window._moriActiveSimInterval);
-          window._moriActiveSimInterval = null;
-        }
-        return;
-      }
-      if (simProgress < 30) {
-        simProgress += 4 + Math.random() * 3;
-      } else if (simProgress < 60) {
-        simProgress += 1.5 + Math.random() * 1.5;
-      } else if (simProgress < 85) {
-        simProgress += 0.3 + Math.random() * 0.5;
-      }
-      const currentPct = Math.min(85, Math.round(simProgress));
-      updateProgress(currentPct, translations[currentLang]?.["btn-processing"] || "Connecting...");
-    }, 200);
-
-    // Remove any existing listeners first to avoid double-firing
-    if (window._moriProgressListener) {
-      try {
-        await window._moriProgressListener.remove?.();
-      } catch (_) {}
-      window._moriProgressListener = null;
-    }
+    let lastDataTime = Date.now();
 
     const onRealProgress = (progress) => {
       if (!progress) return;
+      if (progress.url && progress.url !== progressUrl) return;
       const bytes = Number(progress.bytes ?? progress.bytesWritten ?? 0);
       const contentLength = Number(progress.contentLength ?? 0);
 
       if (bytes > 0 || contentLength > 0) {
-        if (!realProgressReceived) {
-          realProgressReceived = true;
-          if (window._moriActiveSimInterval) {
-            clearInterval(window._moriActiveSimInterval);
-            window._moriActiveSimInterval = null;
-          }
-        }
+        realProgressReceived = true;
       }
 
       const now = Date.now();
@@ -292,6 +303,7 @@ export async function startNativeDownload(
         if (bytes > lastBytes) {
           currentSpeedBps = (bytes - lastBytes) / timeDiff;
           lastBytes = bytes;
+          lastDataTime = now;
         }
         lastTime = now;
       }
@@ -301,22 +313,32 @@ export async function startNativeDownload(
 
       let pct = 0;
       let statusText = "Downloading...";
+      let badgeText = null;
 
       if (contentLength > 0) {
-        pct = Math.min(100, Math.round((bytes / contentLength) * 100));
+        pct = Math.min(99, Math.floor((bytes / contentLength) * 100));
         statusText = `${formatBytes(bytes)} / ${formatBytes(contentLength)} (${formatBytes(speed)}/s)`;
+        badgeText = `${pct}%`;
       } else if (bytes > 0) {
+        // Unknown total length (e.g. chunked streams)
+        // Scaled progression that doesn't freeze prematurely at 95%
+        const mb = bytes / (1024 * 1024);
+        pct = Math.min(94, Math.round(15 + 79 * (mb / (mb + 80))));
         statusText = `${formatBytes(bytes)} (${formatBytes(speed)}/s)`;
-        pct = Math.min(98, Math.round(100 * (1 - Math.exp(-bytes / 2500000))));
+        badgeText = formatBytes(bytes);
       }
 
-      updateProgress(pct, statusText);
+      if (bytes > 0 && now - lastDataTime > 12000) {
+        statusText = `${formatBytes(bytes)} (Stalled...)`;
+      }
+
+      updateProgress(pct, statusText, badgeText);
     };
 
     // Listen for real progress if Filesystem exists
     if (Filesystem?.addListener) {
       try {
-        window._moriProgressListener = await Filesystem.addListener(
+        progressListener = await Filesystem.addListener(
           "progress",
           onRealProgress,
         );
@@ -336,7 +358,14 @@ export async function startNativeDownload(
     }
 
     const sanitizedTitle = sanitizeTitle(title, type, author);
-    let fileName = generateFileName(sanitizedTitle, ext, sourceUrl, url);
+    let fileName = generateFileName(
+      sanitizedTitle,
+      ext,
+      sourceUrl,
+      url,
+      type,
+      author,
+    );
 
     const isAudio = /mp3|audio|128k|48k|m4a|wav|flac/i.test(type);
     const rawVideoFolder = (localStorage.getItem("mori_download_path") || "").trim();
@@ -437,10 +466,12 @@ export async function startNativeDownload(
     }
 
     actualDownloadUrl = cleanDownloadUrl(actualDownloadUrl);
+    progressUrl = actualDownloadUrl;
     const downloadHeaders = buildDownloadHeaders(
       actualDownloadUrl,
       sourceUrl,
       url,
+      meta?.headers,
     );
 
     const { savedFile, successfulDir, cancelled } = await saveToStorage({
@@ -451,6 +482,11 @@ export async function startNativeDownload(
       downloadHeaders,
       directoriesToTry,
       checkCancelled,
+      onSaving: () => {
+        const savingText =
+          translations[currentLang]?.["label-saving"] || "SAVING...";
+        updateProgress(99, savingText, savingText);
+      },
     });
 
     if (cancelled || checkCancelled()) {
@@ -464,15 +500,17 @@ export async function startNativeDownload(
       window._moriActiveSimInterval = null;
     }
 
-    updateProgress(100, translations[currentLang]?.["status-saved"] || "Saved");
+    updateProgress(100, t("status-saved"));
+    downloadBubble.completeDownload(dlId, t("status-saved"));
+
     if (btn) {
       const b = btn.querySelector(".dl-badge");
       if (b) {
-        b.textContent = "SAVED";
+        b.textContent = t("status-saved");
         b.style.backgroundColor = "";
         b.style.color = "";
       } else {
-        btn.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" style="margin-right:8px"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg> SAVED`;
+        btn.innerHTML = `<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" style="margin-right:8px"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg> ${t("status-saved")}`;
       }
     }
 
@@ -487,8 +525,8 @@ export async function startNativeDownload(
       btn,
       originalContent,
       progressContainer,
+      meta,
     });
-    downloadBubble.completeDownload(dlId, "Saved");
     return postRes;
   } catch (err) {
     console.error("Download failed", err);
@@ -554,7 +592,7 @@ export async function startNativeDownload(
     );
     window._moriActiveDownloadUrl = null;
     window.dispatchEvent(new CustomEvent("mori_download_ended"));
-    if (!window._moriPlaylistDownloading) {
+    if (!window._moriPlaylistDownloading && window._moriActiveDownloadsCount === 0) {
       releaseWakeLock();
       if (window.MoriMainBridge?.stopDownloadService) {
         try {
@@ -566,11 +604,10 @@ export async function startNativeDownload(
       clearInterval(window._moriActiveSimInterval);
       window._moriActiveSimInterval = null;
     }
-    if (window._moriProgressListener) {
+    if (progressListener) {
       try {
-        await window._moriProgressListener.remove?.();
+        await progressListener.remove?.();
       } catch (_) {}
-      window._moriProgressListener = null;
     }
   }
 }

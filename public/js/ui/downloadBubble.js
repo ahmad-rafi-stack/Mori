@@ -152,7 +152,11 @@ function resolveActiveResultItem(rawUrl) {
 
 function isExportPdfButton(btn) {
   if (!btn) return false;
-  if (btn.classList.contains("dl-pdf-btn") || btn.classList.contains("pdf-export-btn")) {
+  if (
+    btn.classList.contains("pdf-btn") ||
+    btn.classList.contains("dl-pdf-btn") ||
+    btn.classList.contains("pdf-export-btn")
+  ) {
     return true;
   }
   const txt = (btn.textContent || "").toLowerCase();
@@ -165,7 +169,7 @@ function enhanceDownloadOptions() {
   if (!downloadList) return;
 
   const btns = Array.from(
-    downloadList.querySelectorAll(".dl-item:not(.dl-all-btn):not(.dl-pdf-btn)"),
+    downloadList.querySelectorAll(".dl-item:not(.dl-all-btn):not(.dl-pdf-btn):not(.pdf-btn)"),
   ).filter((btn) => !isExportPdfButton(btn));
   if (btns.length === 0) return;
 
@@ -209,7 +213,12 @@ function enhanceDownloadOptions() {
       const formatted = typeof dl.size === "number" ? formatBytesToMB(dl.size) : dl.size;
       szSpan.textContent = ` (${formatted})`;
     } else if (idx < MAX_PROBE_ITEMS && dl.url && dl.url.startsWith("http")) {
-      const headers = buildDownloadHeaders(dl.url, latestItem?.sourceUrl || latestItem?.url || rawUrl, dl.url);
+      const headers = buildDownloadHeaders(
+        dl.url,
+        latestItem?.sourceUrl || latestItem?.url || rawUrl,
+        dl.url,
+        dl.headers,
+      );
       enqueueSizeProbe(dl.url, headers).then((sz) => {
         if (sz >= MIN_DISPLAY_BYTES && btn.contains(szSpan)) {
           szSpan.textContent = ` (${formatBytesToMB(sz)})`;
@@ -456,7 +465,7 @@ class DownloadBubbleManager {
     this.listEl.prepend(itemEl);
   }
 
-  updateProgress(id, pct, statusText) {
+  updateProgress(id, pct, statusText, customPct = null) {
     const dl = this.activeDownloads.get(id);
     if (!dl) return;
 
@@ -468,7 +477,7 @@ class DownloadBubbleManager {
       const pctEl = dl.element.querySelector(".dbd-item-percent");
       const statusEl = dl.element.querySelector(".dbd-item-status");
       if (bar) bar.style.width = `${dl.progress}%`;
-      if (pctEl) pctEl.textContent = `${dl.progress}%`;
+      if (pctEl) pctEl.textContent = customPct || `${dl.progress}%`;
       if (statusEl && statusText) statusEl.textContent = statusText;
     }
 
@@ -597,6 +606,7 @@ class DownloadBubbleManager {
     const circumference = 119.38;
     if (total === 0) {
       this.progressRing.style.strokeDashoffset = circumference.toString();
+      this.progressRing.style.opacity = "0";
       return;
     }
 
@@ -606,7 +616,8 @@ class DownloadBubbleManager {
     });
     const avg = sum / total;
     const offset = circumference - (avg / 100) * circumference;
-    this.progressRing.style.strokeDashoffset = offset.toString();
+    this.progressRing.style.opacity = avg > 0 ? "1" : "0";
+    this.progressRing.style.strokeDashoffset = Math.max(0, offset).toString();
   }
 }
 

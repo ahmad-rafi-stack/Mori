@@ -37,9 +37,9 @@ export function applyAnimSpeed() {
 }
 
 export function applyTextSize() {
-  const size = localStorage.getItem("mori_text_size") || "medium";
+  const size = localStorage.getItem("mori_text_size") || "small";
   const fontSizeMap = { small: "14px", medium: "16px", large: "18px" };
-  document.documentElement.style.fontSize = fontSizeMap[size] || "16px";
+  document.documentElement.style.fontSize = fontSizeMap[size] || "14px";
   document.body.classList.remove("text-small", "text-medium", "text-large");
   document.body.classList.add(`text-${size}`);
 }
@@ -53,7 +53,7 @@ export function applyGlassmorphism() {
 
 export function applyUiCorner() {
   if (!document.body) return;
-  const corner = localStorage.getItem("mori_ui_corner") || "modern";
+  const corner = localStorage.getItem("mori_ui_corner") || "sharp";
   document.body.classList.remove(
     "corner-sharp",
     "corner-modern",
@@ -67,6 +67,14 @@ export function applyGalleryVisibility() {
   const galleryNavItem = document.querySelector('.nav-item[data-page="gallery"]');
   if (galleryNavItem) {
     galleryNavItem.style.display = isEnabled ? "" : "none";
+  }
+}
+
+export function applyToolsVisibility() {
+  const isEnabled = localStorage.getItem("mori_show_tools") !== "false";
+  const toolsNavItem = document.querySelector('.nav-item[data-page="tools"]');
+  if (toolsNavItem) {
+    toolsNavItem.style.display = isEnabled ? "" : "none";
   }
 }
 
@@ -142,6 +150,37 @@ export function initAppearance() {
         isEnabled
           ? lang["toast-gallery-tab-on"] || "Gallery tab enabled"
           : lang["toast-gallery-tab-off"] || "Gallery tab hidden",
+      );
+    });
+  }
+
+  // 4. Show Tools Tab initialization
+  const showToolsToggle = document.getElementById("showToolsToggle");
+  if (showToolsToggle) {
+    showToolsToggle.checked =
+      localStorage.getItem("mori_show_tools") !== "false";
+    applyToolsVisibility();
+    showToolsToggle.addEventListener("change", (e) => {
+      const isEnabled = e.target.checked;
+      localStorage.setItem("mori_show_tools", isEnabled);
+      applyToolsVisibility();
+      window.dispatchEvent(
+        new CustomEvent("mori_tools_visibility_changed", {
+          detail: { isEnabled },
+        }),
+      );
+
+      // If user is currently on tools page and disables it, redirect to home
+      const activeNav = document.querySelector(".nav-item.active");
+      if (!isEnabled && activeNav?.getAttribute("data-page") === "tools") {
+        document.querySelector('.nav-item[data-page="home"]')?.click();
+      }
+
+      const lang = translations[currentLang] || translations.en;
+      showToast(
+        isEnabled
+          ? lang["toast-tools-tab-on"] || "Tools tab enabled"
+          : lang["toast-tools-tab-off"] || "Tools tab hidden",
       );
     });
   }

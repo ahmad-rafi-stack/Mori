@@ -1,12 +1,14 @@
 // intents.js — clipboard paste, share intent, app url open, app state
-import { translations } from "../i18n/index.js";
+import { translations, t } from "../i18n/index.js";
 import { cleanUrl } from "../utils/urlUtils.js";
+import { normalizeLooseUrl, parseShareText } from "../utils/shareLink.js";
 import {
   Clipboard,
   App,
   triggerHaptic,
   showToast,
   stopAllMedia,
+  pauseAllMedia,
   checkWifiOnlyGuard,
 } from "../utils/index.js";
 import {
@@ -47,7 +49,9 @@ export async function handlePasteFromClipboard(isSilent = false) {
 
     if (text && text.trim()) {
       const trimmed = text.trim();
+      const normalized = normalizeLooseUrl(trimmed);
       const isUrl =
+        Boolean(normalized) ||
         trimmed.startsWith("http") ||
         trimmed.includes(".com") ||
         trimmed.includes(".net") ||
@@ -67,8 +71,9 @@ export async function handlePasteFromClipboard(isSilent = false) {
           triggerHaptic("light");
           return;
         } else {
-          if (urlInput.value.trim() === trimmed) return;
-          urlInput.value = trimmed;
+          const valueToSet = normalized || trimmed;
+          if (urlInput.value.trim() === valueToSet) return;
+          urlInput.value = valueToSet;
           urlInput.dispatchEvent(new Event("input"));
           triggerHaptic("light");
         }
@@ -167,15 +172,27 @@ function processSharedText(text) {
   if (!text) return;
   setIntentPending(false);
   setLastHandledLinkTime(Date.now());
-  // Find a URL in the text
-  const urlMatch = text.match(/https?:\/\/[^\s]+/);
-  const finalUrl = urlMatch ? urlMatch[0] : text;
+  const share = parseShareText(text);
+  const finalUrl = share?.url || normalizeLooseUrl(text) || text;
 
   urlInput.value = finalUrl;
   urlInput.dispatchEvent(new Event("input"));
 
   // Highlight the input
   urlInput.focus();
+  if (share) {
+    const code = share.password
+      ? t("toast-share-code", { code: share.password })
+      : "";
+    showToast(
+      t("toast-share-kept", {
+        platform: t(`share-platform-${share.platform}`),
+        code,
+      }),
+    );
+    return;
+  }
+
   showToast(translations[currentLang]["toast-pasted-share"]);
 
   // Auto-download after a short delay
@@ -257,7 +274,8 @@ if (App && typeof App.addListener === "function") {
         }, 300);
       }
     } else {
-      // App going to background, reset flags & re-lock sensitive areas
+      // App going to background, pause active media, reset flags & re-lock sensitive areas
+      pauseAllMedia(document);
       setIntentPending(false);
       setHistoryUnlocked(false);
       setSettingsUnlocked(false);
@@ -301,12 +319,18 @@ export function mergePendingHistorySync() {
         if (!newItem.localUri && existing.localUri) {
           newItem.localUri = existing.localUri;
         }
+        if (existing.favorite) { newItem.favorite = true; newItem.favTimestamp = existing.favTimestamp || 0; }
         history.splice(existingIdx, 1);
       }
       history.unshift(newItem);
     });
 
-    safeSetHistory(history.slice(0, 100));
+    const limitVal = localStorage.getItem("mori_history_limit") || "unlimited";
+    if (limitVal !== "unlimited") {
+      const parsed = parseInt(limitVal, 10);
+      history = history.slice(0, !isNaN(parsed) && parsed > 0 ? parsed : 100);
+    }
+    safeSetHistory(history);
 
     if (window.MoriMainBridge?.clearPendingHistoryList) {
       window.MoriMainBridge.clearPendingHistoryList();

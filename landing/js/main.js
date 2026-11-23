@@ -798,9 +798,8 @@
 
     const defaultLabels = {
       android: `Mori v${num}.apk`,
+      cli: "npx @coflyn/mori",
       ios: `Mori v${num}.ipa (AltStore / TrollStore)`,
-      cli: "npx @coflyn/mori (or npm i -g @coflyn/mori)",
-      "cli-docs": "@coflyn/mori • Interactive Terminal CLI",
     };
 
     document.querySelectorAll("[data-dl-file]").forEach((el) => {
@@ -814,8 +813,6 @@
       const platform = card.getAttribute("data-dl-card");
       if (platform === "cli") {
         card.href = "https://www.npmjs.com/package/@coflyn/mori";
-      } else if (platform === "cli-docs") {
-        card.href = "https://github.com/coflyn/Mori/tree/main/cli";
       } else if (assets && assets[platform]) {
         card.href = assets[platform];
       } else {
@@ -835,14 +832,12 @@
         floatingText: "Download APK",
       },
       macos: {
-        heroText: "Run via CLI (npx @coflyn/mori)",
-        floatingText: "Get Mori CLI",
-        url: "https://www.npmjs.com/package/@coflyn/mori",
+        heroText: "Install CLI: npx @coflyn/mori",
+        floatingText: "Run Mori CLI",
       },
       windows: {
-        heroText: "Run via CLI (npx @coflyn/mori)",
-        floatingText: "Get Mori CLI",
-        url: "https://www.npmjs.com/package/@coflyn/mori",
+        heroText: "Install CLI: npx @coflyn/mori",
+        floatingText: "Run Mori CLI",
       },
       ios: {
         heroText: "Download for iOS (.ipa)",
@@ -852,10 +847,11 @@
 
     if (os && osMeta[os]) {
       const targetUrl =
-        osMeta[os].url ||
-        (assets && assets[os]
-          ? assets[os]
-          : `https://github.com/coflyn/Mori/releases/tag/${tag}`);
+        os === "macos" || os === "windows"
+          ? "https://www.npmjs.com/package/@coflyn/mori"
+          : assets && assets[os]
+            ? assets[os]
+            : `https://github.com/coflyn/Mori/releases/tag/${tag}`;
 
       if (heroBtn) {
         heroBtn.textContent = osMeta[os].heroText;
@@ -929,6 +925,13 @@
             const url = a.browser_download_url;
             if (n.endsWith(".apk")) {
               assets.android = url;
+            } else if (n.endsWith(".dmg")) {
+              assets.macos = url;
+            } else if (
+              n.endsWith("Setup.exe") ||
+              (n.endsWith(".exe") && !assets.windows)
+            ) {
+              assets.windows = url;
             } else if (n.endsWith(".ipa")) {
               assets.ios = url;
             }

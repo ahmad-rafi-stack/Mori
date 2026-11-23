@@ -24,8 +24,13 @@ import {
 } from "./scrapers/index.js";
 import { cleanUrl } from "./utils/urlUtils.js";
 import { getUserAgent } from "./utils/index.js";
-import { translations, getInitialLanguage } from "./i18n/index.js";
+import { translations, getInitialLanguage, t } from "./i18n/index.js";
 import { safeSetHistory } from "./modules/history.js";
+import {
+  generateFileName,
+  sanitizeTitle,
+  resolveExtension,
+} from "./downloader/filename.js";
 
 let currentLang = getInitialLanguage();
 let lang = translations[currentLang] || translations.en;
@@ -387,7 +392,7 @@ function renderDownloadList(result) {
     lang["label-download"] || "DOWNLOAD"
   ).toUpperCase();
 
-  const esc = (s) =>
+  const escapeHtml = (s) =>
     String(s ?? "")
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
@@ -409,10 +414,10 @@ function renderDownloadList(result) {
 
     btn.innerHTML = `
       <div style="text-align: left; flex: 1; min-width: 0; padding-right: 12px;">
-        <div style="font-weight:600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${esc(optionLabel)} ${idx + 1}</div>
-        <div class="dl-type" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${esc(label)}</div>
+        <div style="font-weight:600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(optionLabel)} ${idx + 1}</div>
+        <div class="dl-type" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escapeHtml(label)}</div>
       </div>
-      <div class="dl-badge" style="flex-shrink: 0;">${esc(downloadBadgeText)}</div>
+      <div class="dl-badge" style="flex-shrink: 0;">${escapeHtml(downloadBadgeText)}</div>
     `;
 
     btn.onclick = () => triggerDownload(dl, result.title || "Mori_Media", idx);
@@ -489,7 +494,7 @@ async function triggerDownload(dlItem, title, idx) {
         }
       });
       if (foundLink) finalUrl = foundLink;
-      else throw new Error("Could not resolve Apple Music download link");
+      else throw new Error(t("err-resolve-download"));
     } else if (finalUrl.startsWith("spotidown_resolve:")) {
       const parts = finalUrl.replace("spotidown_resolve:", "").split("|||");
       const payloadStr = parts[0];
@@ -528,7 +533,7 @@ async function triggerDownload(dlItem, title, idx) {
         }
       });
       if (foundLink) finalUrl = foundLink;
-      else throw new Error("Could not resolve SpotiDown download link");
+      else throw new Error(t("err-resolve-download"));
     } else if (finalUrl.startsWith("soundloaders_resolve:")) {
       const parts = finalUrl.replace("soundloaders_resolve:", "").split("|||");
       const dataVal = parts[0];
@@ -575,7 +580,7 @@ async function triggerDownload(dlItem, title, idx) {
           /href=["'](https:\/\/[^"']*(?:cdnv1|\/v1\?token=)[^"']+)["']/,
         );
       if (match && match[1]) finalUrl = match[1];
-      else throw new Error("Could not resolve Soundloaders download link");
+      else throw new Error(t("err-resolve-download"));
     } else if (
       finalUrl.startsWith("youtube_resolve:") ||
       finalUrl.startsWith("ytmp3gg_resolve:")
@@ -589,19 +594,19 @@ async function triggerDownload(dlItem, title, idx) {
       let downloadUrl = null;
 
       try {
+        const DEFAULT_API_KEY =
+          "ytmp3_572dd96834f5c4a575b198d63e1df13e0caf73667c6fdfe39dc6160fb4246b55";
+        const mobiHeaders = {
+          Origin: "https://ytmp3.gl",
+          Referer: "https://ytmp3.gl/",
+          "User-Agent": getUserAgent(),
+          Accept: "application/json, text/plain, */*",
+        };
         const initRaw = window.MoriShareBridge.httpRequest(
           JSON.stringify({
-            url: `https://a.ymcdn.org/api/v1/init?p=y&23=1llum1n471&_=${Math.random()}`,
+            url: `https://fancy-sea-5d3d.holy-breeze-fec5.workers.dev/?m=i&k=${DEFAULT_API_KEY}&v=${ytId}&f=${format}&_=${Date.now()}`,
             method: "GET",
-            headers: {
-              Origin: "https://ytmp3.mobi",
-              Referer: "https://ytmp3.mobi/en8/",
-              "User-Agent": getUserAgent(),
-              "Sec-Fetch-Dest": "empty",
-              "Sec-Fetch-Mode": "cors",
-              "Sec-Fetch-Site": "cross-site",
-              Accept: "*/*",
-            },
+            headers: mobiHeaders,
           }),
         );
         const initRes = JSON.parse(initRaw);
@@ -610,60 +615,22 @@ async function triggerDownload(dlItem, title, idx) {
             ? JSON.parse(initRes.data)
             : initRes.data;
 
-        if (initData && !initData.error && initData.convertURL) {
-          const convHeaders = {
-            Origin: "https://ytmp3.mobi",
-            Referer: "https://ytmp3.mobi/en8/",
-            "User-Agent": getUserAgent(),
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "cross-site",
-            Accept: "*/*",
-          };
-          let convRaw = window.MoriShareBridge.httpRequest(
-            JSON.stringify({
-              url: `${initData.convertURL}&v=${ytId}&f=${format}&_=${Math.random()}`,
-              method: "GET",
-              headers: convHeaders,
-            }),
-          );
-          let convRes = JSON.parse(convRaw);
-          let convData =
-            typeof convRes.data === "string"
-              ? JSON.parse(convRes.data)
-              : convRes.data;
+        if (initData && !initData.error) {
+          let dlUrl = initData.downloadURL;
+          let progUrl = initData.progressURL;
+          let progress = 0;
+          let attempts = 0;
+          const maxAttempts = 30;
 
-          while (convData && convData.redirect > 0 && convData.redirectURL) {
-            convRaw = window.MoriShareBridge.httpRequest(
-              JSON.stringify({
-                url: `${convData.redirectURL}&v=${ytId}&f=${format}&_=${Math.random()}`,
-                method: "GET",
-                headers: convHeaders,
-              }),
-            );
-            convRes = JSON.parse(convRaw);
-            convData =
-              typeof convRes.data === "string"
-                ? JSON.parse(convRes.data)
-                : convRes.data;
-          }
-
-          if (convData && !convData.error) {
-            let dlUrl = convData.downloadURL;
-            let progUrl = convData.progressURL;
-            let progress = 0;
-            let attempts = 0;
-            const maxAttempts = 30;
-
+          if (initData.status === "progress" && progUrl) {
             while (progress < 3 && attempts < maxAttempts) {
               await new Promise((r) => setTimeout(r, 1500));
-              if (!progUrl) break;
 
               const progRaw = window.MoriShareBridge.httpRequest(
                 JSON.stringify({
-                  url: `${progUrl}&_=${Math.random()}`,
+                  url: `${progUrl}&_=${Date.now()}`,
                   method: "GET",
-                  headers: convHeaders,
+                  headers: mobiHeaders,
                 }),
               );
               try {
@@ -673,7 +640,11 @@ async function triggerDownload(dlItem, title, idx) {
                     ? JSON.parse(progRes.data)
                     : progRes.data || progRes;
                 if (!progData || progData.error) break;
-                progress = progData.progress;
+                if (progData.status === "download" && progData.downloadURL) {
+                  dlUrl = progData.downloadURL;
+                  break;
+                }
+                progress = progData.progress || 0;
                 if (progData.downloadURL) dlUrl = progData.downloadURL;
                 if (progress >= 3) break;
               } catch (_) {
@@ -681,12 +652,15 @@ async function triggerDownload(dlItem, title, idx) {
               }
               attempts++;
             }
+          }
 
-            if (dlUrl && progress >= 3) {
-              if (dlUrl.startsWith("//")) dlUrl = "https:" + dlUrl;
-              if (dlUrl.startsWith("/")) dlUrl = "https://ytmp3.mobi" + dlUrl;
-              downloadUrl = dlUrl;
+          if (dlUrl) {
+            if (dlUrl.startsWith("//")) dlUrl = "https:" + dlUrl;
+            if (dlUrl.startsWith("/")) {
+              dlUrl =
+                "https://fancy-sea-5d3d.holy-breeze-fec5.workers.dev" + dlUrl;
             }
+            downloadUrl = dlUrl;
           }
         }
       } catch (e) {}
@@ -760,13 +734,13 @@ async function triggerDownload(dlItem, title, idx) {
       }
 
       if (downloadUrl) finalUrl = downloadUrl;
-      else throw new Error("Could not resolve YouTube download link");
+      else throw new Error(t("err-resolve-download"));
     }
   } catch (err) {
     if (window.onDownloadFailed) {
       window.onDownloadFailed(
         filename,
-        err.message || "Failed to resolve link",
+        err.message || t("err-resolve-download"),
       );
     }
     return;
@@ -789,6 +763,13 @@ async function triggerDownload(dlItem, title, idx) {
     ) {
       dlHeaders.Referer = "https://media.ytmp3.gg/";
       dlHeaders.Origin = "https://media.ytmp3.gg";
+    } else if (
+      finalUrl.includes("holy-breeze-fec5.workers.dev") ||
+      finalUrl.includes("ytmp3.gl") ||
+      finalUrl.includes("gammacloud.net")
+    ) {
+      dlHeaders.Referer = "https://ytmp3.gl/";
+      dlHeaders.Origin = "https://ytmp3.gl";
     } else if (
       finalUrl.includes("ymcdn.org") ||
       finalUrl.includes("ytmp3.mobi")
@@ -850,131 +831,18 @@ function generateFilename(title, type, index, author = "", url = "") {
     effectiveTitle = `${effectiveTitle}_${Number(index) + 1}`;
   }
 
-  // Deteksi indeks nomor slide foto (_1, _2, dst.) agar tidak hilang
-  const slideSuffixMatch = effectiveTitle.match(/(_\d+)$/);
-  const slideSuffix = slideSuffixMatch ? slideSuffixMatch[1] : "";
-  if (slideSuffix) {
-    effectiveTitle = effectiveTitle.slice(0, -slideSuffix.length);
-  }
+  const sanitized = sanitizeTitle(effectiveTitle, type, author);
+  const effectiveType = /cover/i.test(type || "") ? `${type} image` : type;
+  const ext = resolveExtension(effectiveType, url);
 
-  // Bersihkan hashtag
-  effectiveTitle = effectiveTitle.replace(/#[^\s#]+/g, "");
-
-  let sanitized = (effectiveTitle || "")
-    .replace(/[\\/:*?"<>|#%&{}\[\]$^+=~`';,!]/g, "")
-    .replace(/[^\w\s\-().@\u4e00-\u9fa5\u3040-\u30ff\uac00-\ud7af]/gi, "")
-    .trim()
-    .replace(/\s+/g, " ");
-
-  const genericPlaceholders = [
-    "unknown",
-    "tiktok user",
-    "douyin user",
-    "rednote creator",
-    "bilibili creator",
-    "facebook media",
-    "creator",
-    "user",
-  ];
-
-  let rawAuthor = String(author || "").trim();
-  let cleanAuthor = rawAuthor
-    .replace(/[\\/:*?"<>|#%&{}\[\]$^+=~`';,!]/g, "")
-    .replace(/[^\w\s\-().@\u4e00-\u9fa5\u3040-\u30ff\uac00-\ud7af]/gi, "")
-    .trim();
-
-  const authorLower = cleanAuthor.replace(/^@+/, "").toLowerCase();
-  const isValidAuthor =
-    cleanAuthor.length > 0 &&
-    authorLower.length > 0 &&
-    !genericPlaceholders.includes(authorLower);
-
-  if (isValidAuthor) {
-    if (!cleanAuthor.startsWith("@")) {
-      cleanAuthor = `@${cleanAuthor}`;
-    }
-    const maxLen = slideSuffix ? 50 : 55;
-    const trimmedCaption = sanitized.substring(0, maxLen).trim();
-    if (!trimmedCaption.toLowerCase().includes(`(${cleanAuthor.toLowerCase()})`)) {
-      sanitized = trimmedCaption
-        ? `${trimmedCaption}${slideSuffix} (${cleanAuthor})`
-        : `${cleanAuthor}${slideSuffix}`;
-    } else {
-      sanitized = `${trimmedCaption}${slideSuffix}`;
-    }
-  } else {
-    const maxLen = slideSuffix ? 50 : 60;
-    const trimmedCaption = sanitized.substring(0, maxLen).trim();
-    sanitized = `${trimmedCaption}${slideSuffix}`;
-  }
-
-  if (!sanitized) sanitized = "Mori_Media";
-
-  let ext = "mp4";
-  const t = (type || "").toLowerCase();
-  const u = (url || "").toLowerCase();
-  const fmtMatch = u.match(/[?&]format=(jpg|jpeg|png|webp)\b/i);
-  if (t.includes("mp3") || t.includes("audio") || /\.mp3(\?|$)/i.test(u)) ext = "mp3";
-  else if (t.includes("m4a") || /\.m4a(\?|$)/i.test(u)) ext = "m4a";
-  else if (t.includes("png") || /\.png(\?|$)/i.test(u) || fmtMatch?.[1] === "png") ext = "png";
-  else if (t.includes("webp") || /\.webp(\?|$)/i.test(u) || fmtMatch?.[1] === "webp") ext = "webp";
-  else if (
-    t.includes("jpg") ||
-    t.includes("jpeg") ||
-    t.includes("image") ||
-    t.includes("photo") ||
-    t.includes("cover") ||
-    /\.jpe?g(\?|$)/i.test(u) ||
-    fmtMatch?.[1] === "jpg" ||
-    fmtMatch?.[1] === "jpeg"
-  )
-    ext = "jpg";
-
-  ext = ext.toLowerCase();
-
-  const template = localStorage.getItem("mori_filename") || "title";
-  let finalName = `${sanitized}.${ext}`;
-
-  if (template === "title-platform") {
-    let platform = "Media";
-    if (currentPlatform) {
-      if (currentPlatform === "tiktok" || currentPlatform === "douyin")
-        platform = "TikTok";
-      else if (currentPlatform === "instagram") platform = "Instagram";
-      else if (currentPlatform === "youtube") platform = "YouTube";
-      else if (currentPlatform === "twitter") platform = "Twitter";
-      else if (currentPlatform === "facebook") platform = "Facebook";
-      else if (currentPlatform === "pinterest") platform = "Pinterest";
-      else if (currentPlatform === "spotify") platform = "Spotify";
-      else if (currentPlatform === "rednote") platform = "RedNote";
-      else if (currentPlatform === "applemusic") platform = "AppleMusic";
-      else if (currentPlatform === "bilibili") platform = "Bilibili";
-      else if (currentPlatform === "pixiv") platform = "Pixiv";
-      else if (currentPlatform === "bandcamp") platform = "Bandcamp";
-      else if (currentPlatform === "reddit") platform = "Reddit";
-      else if (currentPlatform === "terabox") platform = "TeraBox";
-    }
-    finalName = `${sanitized}_${platform}.${ext}`;
-  } else if (template === "title-date") {
-    const dateStr = new Date().toISOString().split("T")[0];
-    finalName = `${sanitized}_${dateStr}.${ext}`;
-  } else if (template === "title") {
-    finalName = `${sanitized}.${ext}`;
-  } else {
-    // title-timestamp
-    finalName = `${sanitized}_${Date.now()}.${ext}`;
-  }
-
-  // Strictly enforce lowercase extension
-  const dotP = finalName.lastIndexOf(".");
-  if (dotP > 0 && dotP < finalName.length - 1) {
-    finalName =
-      finalName.substring(0, dotP) +
-      "." +
-      finalName.substring(dotP + 1).toLowerCase();
-  }
-
-  return finalName;
+  return generateFileName(
+    sanitized,
+    ext,
+    window.__MORI_SHARE_URL || currentPlatform,
+    url || null,
+    type,
+    author,
+  );
 }
 
 // Minimal History Sync
@@ -1009,12 +877,16 @@ function saveHistory(result, url) {
       localFiles: existing ? existing.localFiles || [] : [],
       localUri: existing ? existing.localUri : null,
       localThumbnail: existing ? existing.localThumbnail : null,
+      favorite: existing ? existing.favorite || false : false,
+      favTimestamp: existing ? existing.favTimestamp || 0 : 0,
     };
 
     if (existingIdx !== -1) history.splice(existingIdx, 1);
     history.unshift(newItem);
 
-    const updated = history.slice(0, 100);
+    const limitVal = localStorage.getItem("mori_history_limit") || "unlimited";
+    const parsed = parseInt(limitVal, 10);
+    const updated = limitVal === "unlimited" ? history : history.slice(0, !isNaN(parsed) && parsed > 0 ? parsed : 100);
     safeSetHistory(updated);
     if (window.MoriShareBridge?.savePendingHistory) {
       window.MoriShareBridge.savePendingHistory(JSON.stringify(newItem));

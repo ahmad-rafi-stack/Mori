@@ -123,13 +123,14 @@ export async function scraperFetch(options, serverName = "Server") {
     httpConfig.responseType = options.responseType;
 
   let response;
-  const invoke =
-    window.__TAURI__?.core?.invoke ||
-    window.__TAURI_INTERNALS__?.invoke ||
-    window.__TAURI__?.invoke;
-
-  const nativeBridge = window.MoriMainBridge || window.MoriShareBridge;
-  const capHttp = window.Capacitor?.Plugins?.CapacitorHttp || CapacitorHttp;
+  const nativeBridge =
+    typeof window !== "undefined"
+      ? window.MoriMainBridge || window.MoriShareBridge
+      : null;
+  const capHttp =
+    typeof window !== "undefined"
+      ? window.Capacitor?.Plugins?.CapacitorHttp || CapacitorHttp
+      : null;
 
   if (nativeBridge?.httpRequestAsync) {
     let fetchUrl = options.url;
@@ -222,42 +223,6 @@ export async function scraperFetch(options, serverName = "Server") {
       response = await capHttp.get(httpConfig);
     }
     if (response && !response.url) response.url = options.url;
-  } else if (invoke) {
-    // Native Rust reqwest for Tauri Desktop (100% CORS-free)
-    let fetchUrl = options.url;
-    if (options.params) {
-      const q = new URLSearchParams(options.params).toString();
-      if (q) fetchUrl += (fetchUrl.includes("?") ? "&" : "?") + q;
-    }
-
-    let bodyString = undefined;
-    if (options.data !== undefined) {
-      if (
-        typeof options.data === "object" &&
-        !(options.data instanceof FormData) &&
-        !(options.data instanceof URLSearchParams)
-      ) {
-        if (
-          headers["Content-Type"]?.includes("application/x-www-form-urlencoded")
-        ) {
-          bodyString = new URLSearchParams(options.data).toString();
-        } else {
-          bodyString = JSON.stringify(options.data);
-          if (!headers["Content-Type"])
-            headers["Content-Type"] = "application/json";
-        }
-      } else {
-        bodyString = String(options.data);
-      }
-    }
-
-    response = await invoke("tauri_http_request", {
-      url: fetchUrl,
-      method: method,
-      headers: headers,
-      body: bodyString,
-    });
-    if (response && !response.url) response.url = fetchUrl;
   } else {
     // Standard browser fetch fallback
     let fetchUrl = options.url;
@@ -293,6 +258,7 @@ export async function scraperFetch(options, serverName = "Server") {
       method,
       headers,
       body,
+      redirect: options.redirect || "follow",
       signal: controller.signal,
     });
     clearTimeout(timeoutId);
@@ -301,9 +267,16 @@ export async function scraperFetch(options, serverName = "Server") {
       options.responseType === "arraybuffer"
         ? await res.arrayBuffer()
         : await res.text();
+    const headersObj = Object.fromEntries(res.headers.entries());
+    if (typeof res.headers.getSetCookie === "function") {
+      const allCookies = res.headers.getSetCookie();
+      if (allCookies && allCookies.length > 0) {
+        headersObj["set-cookie"] = allCookies.join("\n");
+      }
+    }
     response = {
       status: res.status,
-      headers: Object.fromEntries(res.headers.entries()),
+      headers: headersObj,
       data: resData,
       url: res.url,
     };

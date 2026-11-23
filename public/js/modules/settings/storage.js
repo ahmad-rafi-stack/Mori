@@ -1,5 +1,5 @@
-import { syncAllSettingsToNative } from "./nativeSync.js";
 // storage.js — download paths, storage calculation, cache clearing, and data management
+import { syncAllSettingsToNative } from "./nativeSync.js";
 import {
   Filesystem,
   showToast,
@@ -12,6 +12,7 @@ import { showConfirm } from "../modals.js";
 import { renderHistory } from "../../ui.js";
 import { onHistoryItemClick, onHistoryDeleteClick, safeSetHistory } from "../history.js";
 import { invalidateGalleryCache } from "../gallery.js";
+import { clearToolsTempCache } from "../tools/index.js";
 import {
   currentLang,
   pathVal,
@@ -101,7 +102,6 @@ export async function updateStorageInfo() {
 
   try {
     let totalSize = 0;
-
     if (Filesystem) {
       totalSize += await getFolderSize("", "CACHE");
       const vPath = customPath || "Download/Mori";
@@ -178,11 +178,7 @@ export async function clearCacheSilently() {
   }
 }
 
-/**
- * Initializes download path pickers, storage event listeners, cache logic, and wipe dialogs
- */
-
-const BACKUP_I18N = {
+export const BACKUP_I18N = {
   en: {
     exportLabel: "Export Backup (.json)",
     importLabel: "Import Backup (.json)",
@@ -282,9 +278,20 @@ const BACKUP_I18N = {
     importSuccess: "बैकअप सफलतापूर्वक पुनर्स्थापित किया गया",
     importError: "अमान्य बैकअप फ़ाइल",
   },
+  es: {
+    exportLabel: "Exportar copia de seguridad (.json)",
+    importLabel: "Importar copia de seguridad (.json)",
+    exportBtn: "EXPORTAR",
+    importBtn: "IMPORTAR",
+    exportSuccess: "Copia de seguridad exportada con éxito",
+    exportSavedTo: "Copia de seguridad guardada en",
+    exportError: "Error al exportar la copia de seguridad",
+    importSuccess: "Copia de seguridad restaurada con éxito",
+    importError: "Archivo de copia de seguridad inválido o dañado",
+  },
 };
 
-const BACKUP_BLOCKED_KEYS = new Set([
+export const BACKUP_BLOCKED_KEYS = new Set([
   "mori_gallery_thumbs",
   "mori_patched_scraper_bin",
   "mori_active_scraper_version",
@@ -294,6 +301,33 @@ const BACKUP_BLOCKED_KEYS = new Set([
 ]);
 const MAX_BACKUP_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_SETTING_VAL_LENGTH = 50000;
+
+export function isValidBackupUrl(str) {
+  if (!str || typeof str !== "string") return false;
+  const s = str.trim().toLowerCase();
+  if (
+    s.startsWith("javascript:") ||
+    s.startsWith("vbscript:") ||
+    s.startsWith("data:text/html")
+  ) {
+    return false;
+  }
+  return (
+    s.startsWith("http://") ||
+    s.startsWith("https://") ||
+    s.startsWith("data:image/") ||
+    s.startsWith("file:") ||
+    s.startsWith("_capacitor_file_") ||
+    s.startsWith("thumb_") ||
+    s.startsWith("/") ||
+    s.startsWith("mori-tool://") ||
+    s.startsWith("spotidown_resolve:") ||
+    s.startsWith("soundloaders_resolve:") ||
+    s.startsWith("youtube_resolve:") ||
+    s.startsWith("ytmp3gg_resolve:") ||
+    s.startsWith("applemusic_resolve:")
+  );
+}
 
 function getBackupText(key) {
   const dict = BACKUP_I18N[currentLang] || BACKUP_I18N.en;
@@ -422,30 +456,6 @@ export function importMoriBackupFromFile(file) {
           currentHistory.map((item) => item?.url).filter(Boolean),
         );
         const merged = [...currentHistory];
-        const isValidBackupUrl = (str) => {
-          if (!str || typeof str !== "string") return false;
-          const s = str.trim().toLowerCase();
-          if (
-            s.startsWith("javascript:") ||
-            s.startsWith("vbscript:") ||
-            s.startsWith("data:text/html")
-          ) {
-            return false;
-          }
-          return (
-            s.startsWith("http://") ||
-            s.startsWith("https://") ||
-            s.startsWith("data:image/") ||
-            s.startsWith("file:") ||
-            s.startsWith("_capacitor_file_") ||
-            s.startsWith("thumb_") ||
-            s.startsWith("/") ||
-            s.startsWith("spotidown_resolve:") ||
-            s.startsWith("soundloaders_resolve:") ||
-            s.startsWith("youtube_resolve:") ||
-            s.startsWith("applemusic_resolve:")
-          );
-        };
 
         for (const item of incomingHistory) {
           if (item && typeof item === "object") {
@@ -491,7 +501,7 @@ export function importMoriBackupFromFile(file) {
         safeSetHistory(merged);
       }
 
-      // Restore other mori_* settings (skipping blocked executable/cache keys)
+      // Restore other mori_* settings (skipping blocked sensitive/executable/cache keys)
       for (const k of moriKeys) {
         if (k === "mori_history" || BACKUP_BLOCKED_KEYS.has(k)) continue;
         const val = dataObj[k];
@@ -597,375 +607,9 @@ function mountBackupRestoreItems() {
   });
 }
 
-
-const HISTORY_FILTER_I18N = {
-  en: {
-    searchPlaceholder: "Search history title or platform...",
-    all: "All",
-    fav: "Favorites",
-    video: "Video",
-    audio: "Music",
-    doc: "Comic / Image",
-    emptyMatch: "No matching history items",
-  },
-  id: {
-    searchPlaceholder: "Cari judul riwayat atau platform...",
-    all: "Semua",
-    fav: "Favorit",
-    video: "Video",
-    audio: "Musik",
-    doc: "Komik / Gambar",
-    emptyMatch: "Tidak ada riwayat yang cocok",
-  },
-  ja: {
-    searchPlaceholder: "履歴のタイトルやサイトを検索...",
-    all: "すべて",
-    fav: "お気に入り",
-    video: "動画",
-    audio: "音楽",
-    doc: "コミック / 画像",
-    emptyMatch: "一致する履歴がありません",
-  },
-  ko: {
-    searchPlaceholder: "기록 제목 또는 플랫폼 검색...",
-    all: "전체",
-    fav: "즐겨찾기",
-    video: "동영상",
-    audio: "음악",
-    doc: "코믹 / 이미지",
-    emptyMatch: "일치하는 기록이 없습니다",
-  },
-  zh: {
-    searchPlaceholder: "搜索历史标题或平台...",
-    all: "全部",
-    fav: "收藏",
-    video: "视频",
-    audio: "音乐",
-    doc: "漫画 / 图片",
-    emptyMatch: "没有匹配的历史记录",
-  },
-  ar: {
-    searchPlaceholder: "ابحث في السجل...",
-    all: "الكل",
-    fav: "المفضلة",
-    video: "فيديو",
-    audio: "موسيقى",
-    doc: "مانغا / صور",
-    emptyMatch: "لا توجد عناصر مطابقة",
-  },
-  ru: {
-    searchPlaceholder: "Поиск по истории...",
-    all: "Все",
-    fav: "Избранное",
-    video: "Видео",
-    audio: "Музыка",
-    doc: "Комиксы / Фото",
-    emptyMatch: "Ничего не найдено",
-  },
-  tl: {
-    searchPlaceholder: "Maghanap sa history...",
-    all: "Lahat",
-    fav: "Paborito",
-    video: "Video",
-    audio: "Musika",
-    doc: "Komiks / Larawan",
-    emptyMatch: "Walang nahanap sa history",
-  },
-  hi: {
-    searchPlaceholder: "इतिहास में खोजें...",
-    all: "सभी",
-    fav: "पसंदीदा",
-    video: "वीडियो",
-    audio: "संगीत",
-    doc: "कॉमिक / चित्र",
-    emptyMatch: "कोई मिलान नहीं मिला",
-  },
-};
-
-function getHistoryFilterText(key) {
-  const dict = HISTORY_FILTER_I18N[currentLang] || HISTORY_FILTER_I18N.en;
-  return dict[key] || HISTORY_FILTER_I18N.en[key];
-}
-
-function classifyHistoryRecord(rec) {
-  if (!rec) return { fav: false, cat: "video" };
-  const isFav = Boolean(rec.favorite);
-  const files = Array.isArray(rec.localFiles) ? rec.localFiles : [];
-  // Match platform domains against URLs only (never captions/titles) to avoid false categorization
-  const urlOnlyStr = ((rec.url || "") + " " + (rec.sourceUrl || "")).toLowerCase();
-
-  for (const f of files) {
-    const t = (f.type || "").toUpperCase();
-    const p = (f.path || f.uri || "").toLowerCase();
-    if (t === "AUDIO" || t === "MP3" || /\.(mp3|m4a|wav|flac|ogg)$/.test(p)) {
-      return { fav: isFav, cat: "audio" };
-    }
-    if (t === "IMAGE" || t === "PHOTO" || t === "PDF" || /\.(pdf|jpe?g|png|webp|gif)$/.test(p)) {
-      return { fav: isFav, cat: "doc" };
-    }
-  }
-  if (Array.isArray(rec.downloads) && rec.downloads.length > 0) {
-    const allPhotos = rec.downloads.every((d) => {
-      const dt = (d?.type || "").toUpperCase();
-      return dt === "PHOTO" || dt === "IMAGE" || dt.startsWith("PAGE ");
-    });
-    if (allPhotos) return { fav: isFav, cat: "doc" };
-  }
-  if (/spotify|soundcloud|music\.apple|bandcamp|deezer/.test(urlOnlyStr)) {
-    return { fav: isFav, cat: "audio" };
-  }
-  if (/komiku|mangadex|bacakomik|kiryu|shinigami|pixiv|pinterest|\.pdf/.test(urlOnlyStr)) {
-    return { fav: isFav, cat: "doc" };
-  }
-  return { fav: isFav, cat: "video" };
-}
-
-function mountHistorySearchAndFilter() {
-  const historyPage = document.getElementById("historyPage");
-  if (!historyPage || document.getElementById("moriHistoryFilterBar")) return;
-
-  if (!document.getElementById("mori-history-filter-style")) {
-    const st = document.createElement("style");
-    st.id = "mori-history-filter-style";
-    st.textContent = `
-      .mori-history-filter-bar {
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-        margin: 8px 0 12px 0;
-      }
-      .mori-history-search-wrap {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        padding: 7px 11px;
-        border-radius: 10px;
-        background: rgba(128, 128, 128, 0.08);
-        border: 1px solid rgba(128, 128, 128, 0.16);
-      }
-      .mori-history-search-wrap input {
-        flex: 1;
-        border: none;
-        background: transparent;
-        color: inherit;
-        font-size: 12.5px;
-        outline: none;
-      }
-      .mori-history-chips {
-        display: flex;
-        gap: 6px;
-        overflow-x: auto;
-        padding-bottom: 2px;
-        scrollbar-width: none;
-      }
-      .mori-history-chips::-webkit-scrollbar {
-        display: none;
-      }
-      .mori-history-chip {
-        border: 1px solid rgba(128, 128, 128, 0.22);
-        background: transparent;
-        color: inherit;
-        font-size: 11px;
-        font-weight: 600;
-        padding: 4px 10px;
-        border-radius: 999px;
-        cursor: pointer;
-        white-space: nowrap;
-        opacity: 0.72;
-        transition: all 0.15s ease;
-      }
-      .mori-history-chip.active {
-        opacity: 1;
-        background: var(--primary, #fff);
-        color: var(--on-primary, #000);
-        border-color: var(--primary, #fff);
-      }
-    `;
-    document.head.appendChild(st);
-  }
-
-  let activeTab = "all";
-  let searchQuery = "";
-  let cachedSortedHistory = null;
-  let searchDebounceTimer = null;
-
-  const invalidateHistoryCache = () => {
-    cachedSortedHistory = null;
-  };
-
-  const getSortedHistory = () => {
-    if (cachedSortedHistory) return cachedSortedHistory;
-    let rawHistory = [];
-    try {
-      rawHistory = JSON.parse(localStorage.getItem("mori_history") || "[]");
-    } catch (_) {}
-    cachedSortedHistory = Array.isArray(rawHistory)
-      ? [...rawHistory].sort((a, b) => {
-          if (a?.favorite && !b?.favorite) return -1;
-          if (!a?.favorite && b?.favorite) return 1;
-          if (a?.favorite && b?.favorite) {
-            return (
-              (b.favTimestamp || b.timestamp || 0) -
-              (a.favTimestamp || a.timestamp || 0)
-            );
-          }
-          return 0;
-        })
-      : [];
-    return cachedSortedHistory;
-  };
-
-  const bar = document.createElement("div");
-  bar.id = "moriHistoryFilterBar";
-  bar.className = "mori-history-filter-bar";
-  bar.style.display = "none";
-  bar.innerHTML = `
-    <div class="mori-history-search-wrap">
-      <svg viewBox="0 0 24 24" width="15" height="15" fill="currentColor" style="opacity:0.6;flex-shrink:0;">
-        <path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
-      </svg>
-      <input type="text" id="moriHistorySearchInput" placeholder="${getHistoryFilterText("searchPlaceholder")}" autocomplete="off" spellcheck="false" />
-    </div>
-    <div class="mori-history-chips">
-      <button type="button" class="mori-history-chip active" data-tab="all">${getHistoryFilterText("all")}</button>
-      <button type="button" class="mori-history-chip" data-tab="fav">${getHistoryFilterText("fav")}</button>
-      <button type="button" class="mori-history-chip" data-tab="video">${getHistoryFilterText("video")}</button>
-      <button type="button" class="mori-history-chip" data-tab="doc">${getHistoryFilterText("doc")}</button>
-      <button type="button" class="mori-history-chip" data-tab="audio">${getHistoryFilterText("audio")}</button>
-    </div>
-  `;
-
-  const anchor =
-    historyPage.querySelector(".history-list") ||
-    historyPage.querySelector(".empty-state");
-  if (anchor) {
-    historyPage.insertBefore(bar, anchor);
-  } else {
-    historyPage.appendChild(bar);
-  }
-
-  const applyFilter = () => {
-    const historyList =
-      historyPage.querySelector(".history-list") ||
-      document.getElementById("historyList");
-    if (!historyList) {
-      bar.style.display = "none";
-      return;
-    }
-
-    const sortedHistory = getSortedHistory();
-
-    const children = Array.from(historyList.children).filter(
-      (el) => !el.classList.contains("mori-history-filter-empty"),
-    );
-
-    if (
-      children.length === 0 ||
-      (children.length === 1 && children[0].classList.contains("empty-history"))
-    ) {
-      bar.style.display = "none";
-      return;
-    }
-    bar.style.display = "flex";
-
-    const q = searchQuery.trim().toLowerCase();
-    let visibleCount = 0;
-
-    children.forEach((card, idx) => {
-      const cardUrl =
-        card.querySelector("[data-url]")?.getAttribute("data-url") || "";
-      const rec =
-        (cardUrl &&
-          sortedHistory.find((item) => item && item.url === cardUrl)) ||
-        sortedHistory[idx] ||
-        null;
-      const text =
-        (card.textContent || "") +
-        " " +
-        (rec?.title || "") +
-        " " +
-        (rec?.url || "");
-      const { fav, cat } = classifyHistoryRecord(rec);
-
-      const matchesSearch = !q || text.toLowerCase().includes(q);
-      const matchesTab =
-        activeTab === "all" ||
-        (activeTab === "fav" &&
-          (fav || card.querySelector(".hist-fav-btn.active"))) ||
-        activeTab === cat;
-
-      if (matchesSearch && matchesTab) {
-        card.style.display = "";
-        visibleCount++;
-      } else {
-        card.style.display = "none";
-      }
-    });
-
-    let emptyEl = historyList.querySelector(".mori-history-filter-empty");
-    if (visibleCount === 0 && children.length > 0) {
-      if (!emptyEl) {
-        emptyEl = document.createElement("div");
-        emptyEl.className = "mori-history-filter-empty";
-        emptyEl.style.cssText =
-          "text-align:center;padding:18px 10px;font-size:12px;opacity:0.65;";
-        historyList.appendChild(emptyEl);
-      }
-      emptyEl.textContent = getHistoryFilterText("emptyMatch");
-      emptyEl.style.display = "block";
-    } else if (emptyEl) {
-      emptyEl.style.display = "none";
-    }
-  };
-
-  const searchInput = bar.querySelector("#moriHistorySearchInput");
-  searchInput?.addEventListener("input", (e) => {
-    searchQuery = e.target.value || "";
-    clearTimeout(searchDebounceTimer);
-    searchDebounceTimer = setTimeout(() => {
-      applyFilter();
-    }, 150);
-  });
-
-  bar.querySelectorAll(".mori-history-chip").forEach((chip) => {
-    chip.addEventListener("click", () => {
-      bar
-        .querySelectorAll(".mori-history-chip")
-        .forEach((c) => c.classList.remove("active"));
-      chip.classList.add("active");
-      activeTab = chip.getAttribute("data-tab") || "all";
-      applyFilter();
-    });
-  });
-
-  const obs = new MutationObserver(() => {
-    invalidateHistoryCache();
-    applyFilter();
-  });
-  obs.observe(historyPage, { childList: true });
-
-  const refreshHistoryFilter = () => {
-    invalidateHistoryCache();
-    applyFilter();
-  };
-  window.addEventListener("mori_history_updated", refreshHistoryFilter);
-  window.addEventListener("mori_favorite_toggled", refreshHistoryFilter);
-  window.addEventListener("mori_file_saved", refreshHistoryFilter);
-
-  window.addEventListener("mori_language_changed", () => {
-    if (searchInput)
-      searchInput.placeholder = getHistoryFilterText("searchPlaceholder");
-    bar.querySelectorAll(".mori-history-chip").forEach((chip) => {
-      const tab = chip.getAttribute("data-tab");
-      if (tab) chip.textContent = getHistoryFilterText(tab);
-    });
-    const emptyEl = historyPage.querySelector(".mori-history-filter-empty");
-    if (emptyEl) emptyEl.textContent = getHistoryFilterText("emptyMatch");
-  });
-
-  applyFilter();
-}
-
+/**
+ * Initializes download path pickers, storage event listeners, cache logic, and wipe dialogs
+ */
 export function initStorageSettings() {
   const isAndroid = window.Capacitor?.getPlatform?.() === "android";
   const isIos = window.Capacitor?.getPlatform?.() === "ios";
@@ -1312,10 +956,6 @@ export function initStorageSettings() {
     }
   });
 
-  // 4b. Mount Backup & Restore (.json) Buttons
-  mountBackupRestoreItems();
-  mountHistorySearchAndFilter();
-
   // 5. Manual Clear Cache Button
   clearCacheBtn?.addEventListener("click", () => {
     const lang = translations[currentLang] || translations.en;
@@ -1346,6 +986,7 @@ export function initStorageSettings() {
               }
             } catch (_) {}
           }
+          await clearToolsTempCache();
           invalidateGalleryCache();
           await updateStorageInfo();
           showToast(lang["label-cache-cleared"] || "Cache cleared");
@@ -1355,6 +996,23 @@ export function initStorageSettings() {
       },
     );
   });
+
+  // 6. Tools Auto-Clean Toggle
+  const toolsAutoCleanToggle = document.getElementById("toolsAutoCleanToggle");
+  if (toolsAutoCleanToggle) {
+    toolsAutoCleanToggle.checked =
+      localStorage.getItem("mori_tools_auto_clean") !== "false";
+    toolsAutoCleanToggle.addEventListener("change", (e) => {
+      const isEnabled = e.target.checked;
+      localStorage.setItem("mori_tools_auto_clean", isEnabled);
+      const lang = translations[currentLang] || translations.en;
+      showToast(
+        isEnabled
+          ? lang["toast-tools-autoclean-on"] || "Tools auto-clean enabled"
+          : lang["toast-tools-autoclean-off"] || "Tools auto-clean disabled",
+      );
+    });
+  }
 
   // 7. Wipe All Data Button
   wipeDataBtn?.addEventListener("click", () => {
@@ -1402,4 +1060,7 @@ export function initStorageSettings() {
       },
     );
   });
+
+  // 8. JSON Backup & Restore
+  mountBackupRestoreItems();
 }

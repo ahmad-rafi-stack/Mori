@@ -24,14 +24,21 @@ export function cleanDownloadUrl(actualDownloadUrl) {
 /**
  * Builds appropriate Referer, Origin, and User-Agent headers for specific platforms
  */
-export function buildDownloadHeaders(actualDownloadUrl, sourceUrl, url) {
+export function buildDownloadHeaders(actualDownloadUrl, sourceUrl, url, customHeaders = {}) {
   const isYtmp3GG =
     actualDownloadUrl.includes("ytmp3.gg") ||
     actualDownloadUrl.includes("convert1s.com") ||
+    actualDownloadUrl.includes(".shop/") ||
     actualDownloadUrl.includes("lilillliiillliillii.shop");
+
+  const isYtmp3Worker =
+    actualDownloadUrl.includes("holy-breeze-fec5.workers.dev") ||
+    actualDownloadUrl.includes("ytmp3.gl") ||
+    actualDownloadUrl.includes("gammacloud.net");
 
   const isYoutube =
     isYtmp3GG ||
+    isYtmp3Worker ||
     actualDownloadUrl.includes("ytmp3.mobi") ||
     actualDownloadUrl.includes("ytdown") ||
     actualDownloadUrl.includes("ymcdn.org") ||
@@ -77,6 +84,9 @@ export function buildDownloadHeaders(actualDownloadUrl, sourceUrl, url) {
   if (isYtmp3GG) {
     downloadHeaders["Referer"] = "https://media.ytmp3.gg/";
     downloadHeaders["Origin"] = "https://media.ytmp3.gg";
+  } else if (isYtmp3Worker) {
+    downloadHeaders["Referer"] = "https://ytmp3.gl/";
+    downloadHeaders["Origin"] = "https://ytmp3.gl";
   } else if (isYoutube) {
     downloadHeaders["Referer"] = "https://ytmp3.mobi/";
     if (
@@ -94,9 +104,12 @@ export function buildDownloadHeaders(actualDownloadUrl, sourceUrl, url) {
     downloadHeaders["Referer"] =
       (sourceUrl || url || "").includes("bilibili.com") ||
       (sourceUrl || url || "").includes("b23.tv") ||
-      actualDownloadUrl.includes("bilivideo.com")
+      actualDownloadUrl.includes("bilivideo.com") ||
+      actualDownloadUrl.includes("akamaized.net")
         ? "https://www.bilibili.com/"
         : "https://www.bilibili.tv/";
+    downloadHeaders["Origin"] = "https://www.bilibili.com";
+    downloadHeaders["User-Agent"] = "Bilibili/1.0";
   }
 
   if (isPinterest) {
@@ -147,6 +160,80 @@ export function buildDownloadHeaders(actualDownloadUrl, sourceUrl, url) {
 
   if (actualDownloadUrl.includes("aplmate")) {
     downloadHeaders["Referer"] = "https://aplmate.com/";
+  }
+
+  const isTikTok =
+    actualDownloadUrl.includes("tiktokcdn.com") ||
+    actualDownloadUrl.includes("tiktok.com") ||
+    actualDownloadUrl.includes("byteoversea.com") ||
+    actualDownloadUrl.includes("ibyteimg.com") ||
+    actualDownloadUrl.includes("/video/tos/") ||
+    (sourceUrl && sourceUrl.includes("tiktok")) ||
+    (url && url.includes("tiktok"));
+
+  if (isTikTok) {
+    const referer =
+      sourceUrl && sourceUrl.includes("tiktok.com")
+        ? sourceUrl
+        : "https://www.tiktok.com/";
+    downloadHeaders["Referer"] = referer;
+    downloadHeaders["Origin"] = "https://www.tiktok.com";
+    downloadHeaders["Range"] = "bytes=0-";
+  }
+
+  const _R34_DOM = atob("cnVsZTM0Lnh4eA==");
+  const isArtGallery =
+    actualDownloadUrl.includes(_R34_DOM) ||
+    (sourceUrl && sourceUrl.includes(_R34_DOM)) ||
+    (url && url.includes(_R34_DOM));
+
+  if (isArtGallery) {
+    downloadHeaders["Referer"] = `https://${_R34_DOM}/`;
+    downloadHeaders["Origin"] = `https://${_R34_DOM}`;
+  }
+
+  const _PH_DOM = atob("cG9ybmh1Yi5jb20=");
+  const _PH_CDN = atob("cGhuY2RuLmNvbQ==");
+  const isPVideo =
+    actualDownloadUrl.includes(_PH_CDN) ||
+    actualDownloadUrl.includes(_PH_DOM) ||
+    (sourceUrl && sourceUrl.includes(_PH_DOM)) ||
+    (url && url.includes(_PH_DOM));
+
+  if (isPVideo) {
+    downloadHeaders["Referer"] = "https://www." + _PH_DOM + "/";
+    downloadHeaders["Origin"] = "https://www." + _PH_DOM;
+  }
+
+  // Universal Fallback: For sniffer & unlisted platforms, set Referer, Origin, and Cookie
+  if (!downloadHeaders["Referer"]) {
+    try {
+      const refTarget = sourceUrl || actualDownloadUrl;
+      if (refTarget && (refTarget.startsWith("http://") || refTarget.startsWith("https://"))) {
+        const parsed = new URL(refTarget);
+        downloadHeaders["Referer"] = parsed.origin + "/";
+        downloadHeaders["Origin"] = parsed.origin;
+      }
+    } catch (_) {}
+  }
+
+  if (!downloadHeaders["Cookie"]) {
+    try {
+      const bridge =
+        typeof window !== "undefined"
+          ? window.MoriMainBridge || window.MoriShareBridge
+          : null;
+      if (bridge?.getCookiesForUrl) {
+        const cookies =
+          bridge.getCookiesForUrl(actualDownloadUrl) ||
+          (sourceUrl ? bridge.getCookiesForUrl(sourceUrl) : "");
+        if (cookies) downloadHeaders["Cookie"] = cookies;
+      }
+    } catch (_) {}
+  }
+
+  if (customHeaders && typeof customHeaders === "object") {
+    Object.assign(downloadHeaders, customHeaders);
   }
 
   return downloadHeaders;

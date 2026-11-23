@@ -134,9 +134,10 @@ export async function releaseWakeLock() {
   }
 }
 
-// Native Folder Picker Helper (macOS, Windows, Android)
+// Native Folder Picker Helper (Android)
 export async function pickNativeFolder() {
-  // 1. Android
+
+  // 2. Android
   if (window.MoriMainBridge?.pickFolder) {
     return new Promise((resolve) => {
       const callbackId = "folder_" + Date.now();
@@ -152,11 +153,11 @@ export async function pickNativeFolder() {
   return null;
 }
 
-// Native Folder Opener Helper (Finder / Explorer / Files app)
+// Native Folder Opener Helper (Android / Files app)
 export async function openNativeFolder(targetPath) {
   if (!targetPath) return false;
 
-  // 1. Android
+  // 2. Android
   if (window.MoriMainBridge?.openFolder) {
     try {
       const res = window.MoriMainBridge.openFolder(targetPath);

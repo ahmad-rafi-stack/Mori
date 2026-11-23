@@ -72,14 +72,24 @@ public class ShareActivity extends AppCompatActivity {
         private final HashMap<String, List<Cookie>> cookieStore = new HashMap<>();
 
         @Override
-        public void saveFromResponse(HttpUrl url, List<Cookie> cookies) {
-            cookieStore.put(url.host(), cookies);
+        public synchronized void saveFromResponse(HttpUrl url, List<Cookie> cookies) {
+            List<Cookie> existing = cookieStore.get(url.host());
+            HashMap<String, Cookie> map = new HashMap<>();
+            if (existing != null) {
+                for (Cookie c : existing) {
+                    map.put(c.name(), c);
+                }
+            }
+            for (Cookie c : cookies) {
+                map.put(c.name(), c);
+            }
+            cookieStore.put(url.host(), new ArrayList<>(map.values()));
         }
 
         @Override
-        public List<Cookie> loadForRequest(HttpUrl url) {
+        public synchronized List<Cookie> loadForRequest(HttpUrl url) {
             List<Cookie> cookies = cookieStore.get(url.host());
-            return cookies != null ? cookies : new ArrayList<>();
+            return cookies != null ? new ArrayList<>(cookies) : new ArrayList<>();
         }
     };
 
@@ -180,6 +190,7 @@ public class ShareActivity extends AppCompatActivity {
                 else if (l.startsWith("ru")) defaultLang = "ru";
                 else if (l.startsWith("tl") || l.startsWith("fil")) defaultLang = "tl";
                 else if (l.startsWith("hi")) defaultLang = "hi";
+                else if (l.startsWith("es")) defaultLang = "es";
             }
         } catch (Exception ignored) {}
         String lang = prefs.getString("mori_lang", defaultLang);
@@ -189,8 +200,14 @@ public class ShareActivity extends AppCompatActivity {
         String downloadPath = prefs.getString("mori_download_path", "Mori");
         String autoFolder = prefs.getString("mori_auto_folder", "true");
         String filenameTemplate = prefs.getString("mori_filename", "title");
+        String filenameCustom = prefs.getString("mori_filename_custom", "");
 
         String escapedUrl = sharedUrl
+                .replace("\\", "\\\\")
+                .replace("'", "\\'")
+                .replace("\n", " ")
+                .replace("\r", "");
+        String escapedCustom = filenameCustom
                 .replace("\\", "\\\\")
                 .replace("'", "\\'")
                 .replace("\n", " ")
@@ -204,6 +221,7 @@ public class ShareActivity extends AppCompatActivity {
                 "  localStorage.setItem('mori_download_path', '" + downloadPath + "');" +
                 "  localStorage.setItem('mori_auto_folder', '" + autoFolder + "');" +
                 "  localStorage.setItem('mori_filename', '" + filenameTemplate + "');" +
+                "  localStorage.setItem('mori_filename_custom', '" + escapedCustom + "');" +
                 "} catch(e) {};" +
                 "if (typeof window.onMoriConfigReady === 'function') window.onMoriConfigReady();";
         webView.evaluateJavascript(js, null);
@@ -212,8 +230,8 @@ public class ShareActivity extends AppCompatActivity {
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel ch = new NotificationChannel(
-                    CHANNEL_ID, "Mori Downloads", NotificationManager.IMPORTANCE_DEFAULT);
-            ch.setDescription("Mori download notifications");
+                    CHANNEL_ID, getString(R.string.notif_channel_complete), NotificationManager.IMPORTANCE_DEFAULT);
+            ch.setDescription(getString(R.string.notif_channel_complete_desc));
             NotificationManager nm = getSystemService(NotificationManager.class);
             if (nm != null) nm.createNotificationChannel(ch);
         }
@@ -224,7 +242,7 @@ public class ShareActivity extends AppCompatActivity {
         if (nm == null) return;
         NotificationCompat.Builder b = new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.stat_sys_download_done)
-                .setContentTitle("Download Complete ✓")
+                .setContentTitle(getString(R.string.notif_complete))
                 .setContentText(title)
                 .setPriority(NotificationCompat.PRIORITY_DEFAULT)
                 .setAutoCancel(true);
@@ -236,7 +254,7 @@ public class ShareActivity extends AppCompatActivity {
         if (nm == null) return;
         NotificationCompat.Builder b = new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.stat_notify_error)
-                .setContentTitle("Download Failed")
+                .setContentTitle(getString(R.string.notif_failed))
                 .setContentText(title + ": " + reason)
                 .setPriority(NotificationCompat.PRIORITY_DEFAULT)
                 .setAutoCancel(true);
@@ -347,7 +365,18 @@ public class ShareActivity extends AppCompatActivity {
 
                 JSONObject resHeaders = new JSONObject();
                 for (String name : res.headers().names()) {
-                    resHeaders.put(name.toLowerCase(), res.header(name));
+                    String lower = name.toLowerCase();
+                    if ("set-cookie".equals(lower)) {
+                        List<String> values = res.headers().values(name);
+                        StringBuilder sb = new StringBuilder();
+                        for (String v : values) {
+                            if (sb.length() > 0) sb.append("\n");
+                            sb.append(v);
+                        }
+                        resHeaders.put("set-cookie", sb.toString());
+                    } else {
+                        resHeaders.put(lower, res.header(name));
+                    }
                 }
 
                 String resData;
@@ -371,6 +400,23 @@ public class ShareActivity extends AppCompatActivity {
             }
         }
 
+        @JavascriptInterface
+        public String getCookiesForUrl(String urlStr) {
+            try {
+                HttpUrl hu = HttpUrl.parse(urlStr);
+                if (hu != null) {
+                    List<Cookie> cookies = memoryCookieJar.loadForRequest(hu);
+                    StringBuilder sb = new StringBuilder();
+                    for (Cookie c : cookies) {
+                        if (sb.length() > 0) sb.append("; ");
+                        sb.append(c.name()).append("=").append(c.value());
+                    }
+                    return sb.toString();
+                }
+            } catch (Exception ignored) {}
+            return "";
+        }
+
         /**
          * Download a file natively via OkHttp.
          * Called from share.js after scraping succeeds.
@@ -387,7 +433,7 @@ public class ShareActivity extends AppCompatActivity {
                 // Start Foreground Service for background protection
                 try {
                     Intent sIntent = new Intent(ShareActivity.this, DownloadForegroundService.class);
-                    sIntent.putExtra("title", title != null ? title : "Downloading Media...");
+                    sIntent.putExtra("title", title != null ? title : getString(R.string.notif_downloading));
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         startForegroundService(sIntent);
                     } else {

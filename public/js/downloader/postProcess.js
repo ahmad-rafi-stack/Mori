@@ -22,6 +22,7 @@ export async function handlePostDownload({
   btn,
   originalContent,
   progressContainer,
+  meta = {},
 }) {
   triggerHaptic("success");
   if (!window._moriPlaylistDownloading) {
@@ -55,17 +56,28 @@ export async function handlePostDownload({
     new CustomEvent("mori_file_saved", {
       detail: {
         url: sourceUrl || url,
+        sourceUrl: sourceUrl || url,
         path: savedFile.path,
         uri: savedUri,
-        title: effectiveTitle,
+        title: meta.title || effectiveTitle,
+        thumbnail: meta.thumbnail || null,
+        type: meta.type || null,
       },
     }),
   );
 
-  if (window.MoriMainBridge?.scanMediaFile) {
-    try {
-      window.MoriMainBridge.scanMediaFile(savedFile.path || savedUri);
-    } catch (_) {}
+  const shouldSaveToPhotos =
+    localStorage.getItem("mori_save_to_photos") !== "false";
+  if (shouldSaveToPhotos) {
+    if (window.MoriMainBridge?.saveToCameraRoll) {
+      try {
+        window.MoriMainBridge.saveToCameraRoll(savedUri || savedFile.path);
+      } catch (_) {}
+    } else if (window.MoriMainBridge?.scanMediaFile) {
+      try {
+        window.MoriMainBridge.scanMediaFile(savedUri || savedFile.path);
+      } catch (_) {}
+    }
   }
 
   const displayFolder = targetFolder.startsWith("/") ? targetFolder : `/${targetFolder}`;

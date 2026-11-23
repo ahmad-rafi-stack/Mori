@@ -21,10 +21,108 @@ import {
   switchToSingleMode,
 } from "./core.js";
 
+export function sanitizeHistoryStorage() {
+  try {
+    const raw = localStorage.getItem("mori_history");
+    if (raw && (raw.includes("data:image/") || raw.length > 300000)) {
+      const history = JSON.parse(raw);
+      let changed = false;
+      const cleaned = history.map((item) => {
+        const copy = { ...item };
+        if (
+          typeof copy.thumbnail === "string" &&
+          copy.thumbnail.startsWith("data:") &&
+          copy.thumbnail.length > 10000
+        ) {
+          copy.thumbnail = null;
+          changed = true;
+        }
+        if (
+          typeof copy.localThumbnail === "string" &&
+          copy.localThumbnail.startsWith("data:") &&
+          copy.localThumbnail.length > 10000
+        ) {
+          copy.localThumbnail = null;
+          changed = true;
+        }
+        if (Array.isArray(copy.localFiles)) {
+          copy.localFiles = copy.localFiles.map((f) => {
+            if (
+              typeof f.thumbnail === "string" &&
+              f.thumbnail.startsWith("data:") &&
+              f.thumbnail.length > 10000
+            ) {
+              changed = true;
+              return { ...f, thumbnail: null };
+            }
+            return f;
+          });
+        }
+        return copy;
+      });
+      if (changed) {
+        localStorage.setItem("mori_history", JSON.stringify(cleaned));
+      }
+    }
+  } catch (e) {
+    console.warn("[Mori History] sanitizeHistoryStorage failed:", e);
+  }
+}
+sanitizeHistoryStorage();
+
 export function safeSetHistory(history) {
   if (!Array.isArray(history)) return false;
+  const sanitized = history.map((item) => {
+    let copy = item;
+    const hasBigThumb =
+      (typeof copy.thumbnail === "string" &&
+        copy.thumbnail.startsWith("data:") &&
+        copy.thumbnail.length > 10000) ||
+      (typeof copy.localThumbnail === "string" &&
+        copy.localThumbnail.startsWith("data:") &&
+        copy.localThumbnail.length > 10000);
+    const hasBigFileThumb =
+      Array.isArray(copy.localFiles) &&
+      copy.localFiles.some(
+        (f) =>
+          typeof f.thumbnail === "string" &&
+          f.thumbnail.startsWith("data:") &&
+          f.thumbnail.length > 10000,
+      );
+
+    if (hasBigThumb || hasBigFileThumb) {
+      copy = { ...copy };
+      if (
+        typeof copy.thumbnail === "string" &&
+        copy.thumbnail.startsWith("data:") &&
+        copy.thumbnail.length > 10000
+      ) {
+        copy.thumbnail = null;
+      }
+      if (
+        typeof copy.localThumbnail === "string" &&
+        copy.localThumbnail.startsWith("data:") &&
+        copy.localThumbnail.length > 10000
+      ) {
+        copy.localThumbnail = null;
+      }
+      if (Array.isArray(copy.localFiles)) {
+        copy.localFiles = copy.localFiles.map((f) => ({
+          ...f,
+          thumbnail:
+            typeof f.thumbnail === "string" &&
+            f.thumbnail.startsWith("data:") &&
+            f.thumbnail.length > 10000
+              ? null
+              : f.thumbnail,
+        }));
+      }
+    }
+    return copy;
+  });
+
   try {
-    localStorage.setItem("mori_history", JSON.stringify(history));
+    localStorage.setItem("mori_history", JSON.stringify(sanitized));
     return true;
   } catch (quotaErr) {
     console.warn(
@@ -282,10 +380,25 @@ window.addEventListener("mori_file_saved", async (e) => {
   const target = cleanUrl(url);
   let history = JSON.parse(localStorage.getItem("mori_history") || "[]");
 
-  const isVideo = path.toLowerCase().endsWith(".mp4");
-  const isAudio = path.toLowerCase().endsWith(".mp3");
-  const isImage = /\.(jpg|jpeg|png|webp)/i.test(path);
+  const isVideo = /\.(mp4|webm|mov|mkv|m4v|3gp|flv)(\?|#|$)/i.test(path);
+  const isAudio = /\.(mp3|wav|m4a|aac|flac|ogg|opus|weba)(\?|#|$)/i.test(path);
+  const isImage = /\.(jpe?g|png|webp|gif|svg|avif|bmp)(\?|#|$)/i.test(path);
+  const isPdf = /\.pdf(\?|#|$)/i.test(path);
+  const fileType =
+    e.detail.type ||
+    (isVideo ? "VIDEO" : isAudio ? "MP3" : isPdf ? "PDF" : isImage ? "IMAGE" : "FILE");
   const fileUri = uri || path;
+
+  let itemThumb = e.detail.thumbnail || null;
+  if (
+    typeof itemThumb === "string" &&
+    itemThumb.startsWith("data:") &&
+    itemThumb.length > 25000
+  ) {
+    itemThumb = null;
+  }
+  const itemTitle =
+    e.detail.title || (path ? path.split("/").pop() : "") || "Downloaded Media";
 
   let matched = false;
   history = history.map((item, index) => {
@@ -294,6 +407,7 @@ window.addEventListener("mori_file_saved", async (e) => {
     const isUrlMatch =
       (itemClean && itemClean === target) ||
       (sourceClean && sourceClean === target) ||
+      (item.url && item.url === url) ||
       (item.url && item.url.includes(url)) ||
       (url && url.includes(item.url)) ||
       (item.sourceUrl &&
@@ -303,20 +417,50 @@ window.addEventListener("mori_file_saved", async (e) => {
       matched = true;
       const localFiles = item.localFiles || [];
       const trackTitle = e.detail.title;
+      const thumb = item.thumbnail || item.localThumbnail || itemThumb;
       if (!localFiles.find((f) => f.path === path)) {
         localFiles.push({
           path,
           uri: fileUri,
-          type: isVideo ? "VIDEO" : isAudio ? "MP3" : "IMAGE",
-          thumbnail: item.thumbnail || item.localThumbnail || null,
+          type: fileType,
+          thumbnail: thumb,
           title: trackTitle || item.title,
         });
       }
       // Preserve original playlist title & playlist thumbnail intact!
-      return { ...item, localFiles, localUri: fileUri };
+      return {
+        ...item,
+        thumbnail: item.thumbnail || itemThumb,
+        localFiles,
+        localUri: fileUri,
+      };
     }
     return item;
   });
+
+  if (!matched) {
+    const fileItem = {
+      path,
+      uri: fileUri,
+      type: fileType,
+      thumbnail: itemThumb,
+      title: itemTitle,
+    };
+    const newItem = {
+      title: itemTitle,
+      thumbnail: itemThumb,
+      url: url,
+      sourceUrl: e.detail.sourceUrl || url,
+      timestamp: Date.now(),
+      downloads: [],
+      localFiles: [fileItem],
+      localUri: fileUri,
+      localThumbnail: itemThumb,
+      favorite: false,
+      favTimestamp: 0,
+    };
+    history.unshift(newItem);
+  }
 
   const limitVal = localStorage.getItem("mori_history_limit") || "unlimited";
   if (limitVal !== "unlimited") {
@@ -365,7 +509,9 @@ window.addEventListener("mori_file_saved", async (e) => {
 
       if (!localThumbnail || !isValidThumb(localThumbnail)) {
         history = JSON.parse(localStorage.getItem("mori_history") || "[]");
-        const found = history.find((h) => cleanUrl(h.url) === target);
+        const found = history.find(
+          (h) => (target && cleanUrl(h.url) === target) || h.url === url,
+        );
         if (found?.thumbnail && isValidThumb(found.thumbnail)) {
           localThumbnail = found.thumbnail;
         }
@@ -374,7 +520,7 @@ window.addEventListener("mori_file_saved", async (e) => {
       if (localThumbnail && isValidThumb(localThumbnail)) {
         history = JSON.parse(localStorage.getItem("mori_history") || "[]");
         history = history.map((item) => {
-          if (cleanUrl(item.url) === target) {
+          if ((target && cleanUrl(item.url) === target) || item.url === url) {
             const localFiles = item.localFiles || [];
             localFiles.forEach((f) => {
               if (f.path === path) f.thumbnail = localThumbnail;
@@ -385,9 +531,9 @@ window.addEventListener("mori_file_saved", async (e) => {
               localFiles,
               localThumbnail: localThumbnail,
               thumbnail: keepOriginalThumb,
-              thumbVersion: 3,
-              versionCode: 21,
-              versionName: "4.5.1",
+              thumbVersion: 5,
+              versionCode: 24,
+              versionName: "4.6.1",
               thumbRepaired: true,
             };
           }
@@ -575,9 +721,27 @@ export function refreshAllVideoThumbnails() {
     const pendingIndices = [];
     for (let i = 0; i < history.length; i++) {
       const item = history[i];
-      const hasBadThumb = !item.localThumbnail || item.localThumbnail.startsWith("thumb_") || item.thumbnail?.startsWith("thumb_");
-      if (item.thumbVersion !== 4 || hasBadThumb) {
+      const hasVideo =
+        (item.localFiles &&
+          item.localFiles.some(
+            (f) =>
+              f.type === "VIDEO" ||
+              /\.(mp4|mov|mkv|webm)/i.test(f.path || f.name || ""),
+          )) ||
+        (item.localUri && /\.(mp4|mov|mkv|webm)/i.test(item.localUri));
+      if (!hasVideo) {
+        if (item.thumbVersion !== 5) item.thumbVersion = 5;
+        continue;
+      }
+      const hasBadThumb =
+        !item.localThumbnail ||
+        (item.localThumbnail.startsWith("thumb_") &&
+          !item.localThumbnail.includes("/")) ||
+        (item.thumbnail?.startsWith("thumb_") &&
+          !item.thumbnail.includes("/"));
+      if (item.thumbVersion !== 5 && hasBadThumb) {
         pendingIndices.push(i);
+        if (pendingIndices.length >= 6) break;
       }
     }
 
@@ -655,7 +819,7 @@ export function refreshAllVideoThumbnails() {
           }
         } catch (_) {}
       }
-      item.thumbVersion = 4;
+      item.thumbVersion = 5;
       safeSetHistory(currentHistory);
 
       const historyList = document.querySelector(".history-list");

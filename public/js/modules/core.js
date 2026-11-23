@@ -2,11 +2,10 @@
 import { translations, getInitialLanguage } from "../i18n/index.js";
 import { Filesystem } from "../utils/index.js";
 
-export const APP_VERSION = "4.5.1";
+export const APP_VERSION = "4.6.1";
 export const GITHUB_REPO = "ahmad-rafi-stack/Mori";
 export const UPDATE_CHECK_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;
 export const REPO_URL = `https://github.com/${GITHUB_REPO}`;
-
 
 
 export const urlInput = document.getElementById("urlInput");
@@ -122,7 +121,6 @@ export const clearCacheBtn = document.getElementById("clearCacheBtn");
 export const wipeDataBtn = document.getElementById("wipeDataBtn");
 export const reportBugBtn = document.getElementById("reportBugBtn");
 export const checkUpdateBtn = document.getElementById("checkUpdateBtn");
-export const checkScraperUpdateBtn = document.getElementById("checkScraperUpdateBtn");
 export const platformVal = document.getElementById("platformVal");
 export const currentLangDisplay = document.getElementById("currentLangDisplay");
 export const darkModeToggle = document.getElementById("darkModeToggle");

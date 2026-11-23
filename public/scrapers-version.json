@@ -1,7 +1,7 @@
 {
-  "scraperVersion": 6,
-  "updatedAt": 1795046700000,
+  "scraperVersion": 7,
+  "updatedAt": 1794619079778,
   "minAppVersion": "4.3.0",
-  "sourceHash": "f69946ee523c46a60e32d15d570ad2632210eb4dbf8d6b0adb1d14615c9ae292",
-  "changelog": "Add Twitter/X photo & multi-photo extraction via FxTwitter, complete cross-platform author extraction, and harden downloader & backup utilities"
+  "sourceHash": "4ebfc267d28c7b4167ea070d6dfe21fe54a983c87060fa7133a2dade1efdfc37",
+  "changelog": "Migrate YouTube Server 2 to ytmp3.gl and preserve Bilibili part parameter"
 }
